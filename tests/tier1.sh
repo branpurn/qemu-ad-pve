@@ -690,7 +690,7 @@ chk "C19a README has a 'Vendor vs side version skew' section" 'grep -q "^## Vend
 chk "C19b skew table covers spice/qxl, pc-q35-11.0, rbd/pbs, CPU models, -loadstate, -id, +pveN, -iscsi, argv[0]" 'sec=$(sed -n "/^## Vendor vs side version skew/,/^## [^V]/p" "$R"); m=0; for k in "-spice" "qxl" "pc-q35-11.0" "rbd" "pbs" "-loadstate" "-id" "+pve" "-iscsi" "argv"; do grep -qF -- "$k" <<<"$sec" || { echo "missing $k"; m=1; }; done; grep -q "^| *Option" <<<"$sec" && [[ $m -eq 0 ]]'
 chk "C19c README mentions the crypto backend / libgcrypt and the automatic rebuild" 'grep -qi "libgcrypt" "$R" && grep -qi "rebuil" "$R"'
 chk "C19e README no longer says GraniteRapids/avx10 are missing from 10.2.2, and says only SapphireRapids-v5 is" 'sec=$(grep "^| CPU model" "$R"); [[ -n $sec && $sec == *SapphireRapids-v5* && $sec == *"exist in 10.2.2"* && $sec != *"newer than 10.2 (for example"* ]]'
-chk "C19f README says http(s)/ftp(s)/spice/rbd/usb are absent because of the build flags, not intrinsic" 'for k in --disable-spice --disable-rbd --disable-curl --disable-libusb; do grep -q -- "$k" "$R" || { echo "missing $k"; exit 1; }; done; ! grep -q "Vendor-only block drivers (.pve-qemu. patches; rbd needs librbd)" "$R"'
+chk "C19f README says http(s)/ftp(s)/spice/rbd/usb are absent because of the build flags, not intrinsic" 'm=0; for k in --disable-spice --disable-rbd --disable-curl --disable-libusb; do grep -q -- "$k" "$R" || { echo "missing $k"; m=1; }; done; [[ $m -eq 0 ]] && ! grep -q "Vendor-only block drivers (.pve-qemu. patches; rbd needs librbd)" "$R"'
 chk "C19d README mentions showcmd WARNING lines" 'grep -q "WARNING" "$R"'
 
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"

@@ -124,7 +124,7 @@ install_deps() {
     git wget ca-certificates build-essential ninja-build pkg-config \
     python3 python3-venv meson flex bison \
     libglib2.0-dev libpixman-1-dev zlib1g-dev \
-    libaio-dev liburing-dev
+    libaio-dev liburing-dev libiscsi-dev
 }
 
 # verify_sha256 <file> <expected-or-empty> <label> <knob-name>
@@ -235,6 +235,7 @@ build_qemu() {
       --enable-kvm \
       --enable-linux-aio \
       --enable-linux-io-uring \
+      --enable-libiscsi \
       --disable-docs \
       --disable-werror
     make -j"$(nproc)"

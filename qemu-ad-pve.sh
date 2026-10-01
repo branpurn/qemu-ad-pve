@@ -31,10 +31,11 @@
 #   commands (backup, fleecing, query-proxmox-support) that vanilla QEMU
 #   does not implement. Start and stop still work, because the pidfile and
 #   the QMP socket stay on the paths qemu-server chose.
-# - A machine type of pc-q35-X.Y+pveN will not boot on vanilla QEMU. The
-#   wrapper strips a trailing +pve<N> from each argument before the exec.
-#   Pin the guest to a version this tree knows anyway (pc-q35-10.1 is safe
-#   on the 10.2.2 build).
+# - A machine type of pc-q35-X.Y+pveN will not boot on vanilla QEMU. On the
+#   side-binary path the wrapper strips +pve<N> only inside the value of
+#   -machine / -M (not from -name, -smbios, paths, ...) and drops the
+#   "-id <vmid>" pair. Pin the guest to a version this tree knows anyway
+#   (pc-q35-10.1 is safe on the 10.2.2 build).
 #
 # Usage
 # -----
@@ -49,13 +50,24 @@
 # install is idempotent. Re-run it after a pve-qemu-kvm upgrade; the divert
 # already sends the new vendor binary to /usr/bin/kvm.pve.
 #
+# Do not `apt remove pve-qemu-kvm` while the divert is active; run
+# `uninstall` first. If it was already removed: `apt install --reinstall
+# pve-qemu-kvm` (dpkg puts the vendor binary back at /usr/bin/kvm.pve), then
+# `uninstall`. `status` warns about this state.
+#
+# The VMID list holds one VMID per line. Leading/trailing whitespace and a
+# trailing carriage return (CRLF) are ignored; anything else on the line
+# (such as a comment after the number) makes that line not match.
+#
 # Guest config that actually uses the patch (set these yourself, per VMID)
 # -------------------------------------------------------------------------
 #   cpu: host,hidden=1,hv-vendor-id=GenuineIntel
 #   machine: pc-q35-10.1
 #   args: -smbios type=1,manufacturer=ASUS,product=System,serial=...
 #   hostpci0: 0000:01:00,pcie=1,romfile=/var/lib/qemu-ad/gpu.rom
-# hidden=1 is the stock Proxmox knob (kvm hidden + hypervisor bit clear).
+# hidden=1 is the stock Proxmox knob. Proxmox turns it into kvm=off on the
+# -cpu line (hides the KVM signature leaf); it does NOT clear the CPUID
+# hypervisor bit.
 # The patch rewrites device names, SMBIOS VM bit, and BGRT inside QEMU.
 # SMBIOS manufacturer strings still come from args. Passthrough is a normal
 # hostpci line; do not also assign that PCI address to another guest.
@@ -76,6 +88,7 @@ LIST_FILE="${LIST_FILE:-/etc/qemu-ad/vms}"
 WRAPPER_PATH="${WRAPPER_PATH:-/usr/bin/kvm}"
 VENDOR_PATH="${VENDOR_PATH:-/usr/bin/kvm.pve}"
 LOG_FILE="${LOG_FILE:-/var/log/qemu-ad-wrapper.log}"
+DPKG_LOCK="${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"
 
 # Integrity pins. Known-good SHA-256 for the versions this script has been
 # checked against (tarball verified against QEMU's signed release too). For
@@ -284,6 +297,17 @@ qad_side_args() {
   done
 }
 
+# VMID list matching, shared by the wrapper (embedded with declare -f), add-vm,
+# del-vm and showcmd so they cannot disagree. A line matches when it is exactly
+# the VMID, optionally surrounded by whitespace; [[:space:]] covers the CR of
+# CRLF line endings. $1 must be digits only (callers validate).
+qad_list_pat() { printf '[[:space:]]*%s[[:space:]]*' "$1"; }
+# qad_list_has <vmid> <list-file>: rc 0 if listed; missing/unreadable -> rc 1, silent.
+qad_list_has() {
+  [[ -f $2 ]] || return 1
+  grep -qxE -- "$(qad_list_pat "$1")" "$2" 2>/dev/null
+}
+
 write_wrapper() {
   local out="${1:-$WRAPPER_PATH}"
   say "writing ${out}"
@@ -301,7 +325,7 @@ log=$(printf '%q' "$LOG_FILE")
 # both working although the real binary lives at a different path.
 argv0=$(printf '%q' "$WRAPPER_PATH")
 
-$(declare -f qad_side_args)
+$(declare -f qad_side_args qad_list_pat qad_list_has)
 
 id=""
 for a in "\$@"; do
@@ -313,11 +337,12 @@ for a in "\$@"; do
   esac
 done
 
-if [[ -n \$id ]] && [[ -f \$list ]] && grep -qx "\$id" "\$list"; then
+if [[ -n \$id ]] && qad_list_has "\$id" "\$list"; then
   qad_side_args "\$@"
-  if [[ -w \$log || ! -e \$log ]]; then
-    printf '%s vmid=%s exec %s dropped=%s\\n' "\$(date -Is)" "\$id" "\$side" "\${SIDE_DROPPED[*]:-}" >> "\$log" || true
-  fi
+  # Logging is best effort and must be silent: qm parses our output, and a
+  # missing/unwritable log dir must never fail or noise up a VM start. The
+  # 2>/dev/null on the group also covers the shell's own redirection error.
+  { printf '%s vmid=%s exec %s dropped=%s\\n' "\$(date -Is)" "\$id" "\$side" "\${SIDE_DROPPED[*]:-}" >> "\$log"; } 2>/dev/null || true
   exec -a "\$argv0" "\$side" "\${SIDE_ARGS[@]}"
 fi
 
@@ -337,18 +362,26 @@ dpkg_lock_held() {
   awk -v ino="$ino" '{ n = split($6, a, ":"); if (a[n] == ino) found = 1 } END { exit !found }' /proc/locks
 }
 
+# Printed when the divert is recorded but the vendor binary is gone, which is
+# what `apt remove pve-qemu-kvm` leaves behind (dpkg deletes the diverted path
+# but cannot touch our wrapper).
+vendor_missing_hint() {
+  printf '%s' "${VENDOR_PATH} is missing while the divert for ${WRAPPER_PATH} is still recorded: pve-qemu-kvm was probably removed.
+Recover: reinstall the package (apt install --reinstall pve-qemu-kvm; dpkg writes the vendor binary back to ${VENDOR_PATH}), then run '$0 uninstall' to restore ${WRAPPER_PATH} (or '$0 install' to keep the setup)."
+}
+
 preflight_divert_remove() {
-  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || die "${VENDOR_PATH} is missing; cannot restore ${WRAPPER_PATH} (is pve-qemu-kvm installed?)"
-  if dpkg_lock_held "${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"; then
-    die "another package manager holds ${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}; wait for it to finish and retry"
+  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || die "$(vendor_missing_hint)"
+  if dpkg_lock_held "$DPKG_LOCK"; then
+    die "another package manager holds ${DPKG_LOCK}; wait for it to finish and retry"
   fi
 }
 
 # Pre-flight for anything that rewrites the divert. Cheap, read-only.
 preflight_divert() {
   [[ -e $WRAPPER_PATH ]] || die "${WRAPPER_PATH} does not exist; refusing to divert a missing file (dpkg-divert --rename would silently do nothing). Reinstall pve-qemu-kvm first."
-  if dpkg_lock_held "${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"; then
-    die "another package manager holds ${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}; wait for it to finish and retry"
+  if dpkg_lock_held "$DPKG_LOCK"; then
+    die "another package manager holds ${DPKG_LOCK}; wait for it to finish and retry"
   fi
 }
 
@@ -389,7 +422,7 @@ install_wrapper() {
   else
     say "divert already in place"
   fi
-  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || { rm -f "$staged"; die "divert is recorded but ${VENDOR_PATH} is missing"; }
+  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || { rm -f "$staged"; die "$(vendor_missing_hint)"; }
   if ! mv -f "$staged" "$WRAPPER_PATH"; then
     # /usr/bin/kvm is still the vendor binary here. Undo the divert and the copy.
     dpkg-divert --local --no-rename --remove "$WRAPPER_PATH" && rm -f "$VENDOR_PATH" || true
@@ -404,9 +437,11 @@ add_vm() {
   [[ $id =~ ^[1-9][0-9]*$ ]] || die "add-vm needs a numeric VMID (no leading zeros)"
   install -d "$(dirname "$LIST_FILE")"
   [[ -f $LIST_FILE ]] || : > "$LIST_FILE"
-  if grep -qx "$id" "$LIST_FILE"; then
+  if qad_list_has "$id" "$LIST_FILE"; then
     say "VMID ${id} already listed"
   else
+    # A last line without a newline would otherwise be glued to the new id.
+    if [[ -s $LIST_FILE && -n $(tail -c1 "$LIST_FILE") ]]; then printf '\n' >> "$LIST_FILE"; fi
     printf '%s\n' "$id" >> "$LIST_FILE"
     say "VMID ${id} will launch on ${SIDE_BIN}"
   fi
@@ -422,7 +457,7 @@ del_vm() {
   # (fatal, list untouched). Keep the original file mode.
   local tmp rc=0
   tmp=$(mktemp "${LIST_FILE}.XXXXXX")
-  grep -vx "$id" "$LIST_FILE" > "$tmp" || rc=$?
+  grep -vxE -- "$(qad_list_pat "$id")" "$LIST_FILE" > "$tmp" || rc=$?
   if (( rc > 1 )); then
     command rm -f "$tmp"
     die "could not rewrite ${LIST_FILE}; left unchanged"
@@ -447,7 +482,7 @@ t=sys.stdin.read().replace("\\\n"," ")
 sys.stdout.write("\0".join(shlex.split(t)))' 2>/dev/null) || true
   if [[ ${#vendor[@]} -gt 1 ]]; then
     qad_side_args "${vendor[@]:1}"
-    if grep -qx "$id" "$LIST_FILE" 2>/dev/null; then
+    if qad_list_has "$id" "$LIST_FILE"; then
       say "side-binary view: VMID ${id} IS listed, so this is what gets exec'd (${#SIDE_DROPPED[@]} option(s) dropped: ${SIDE_DROPPED[*]:-none}); not executed"
     else
       say "VMID ${id} is NOT listed: it runs on the vendor binary with the argv above unchanged. Side view below is hypothetical (dropped: ${SIDE_DROPPED[*]:-none})"
@@ -474,6 +509,10 @@ status() {
   else
     echo "divert:     (none)"
   fi
+  if dpkg-divert --list "$WRAPPER_PATH" 2>/dev/null | grep -q "$VENDOR_PATH" \
+     && [[ ! -e $VENDOR_PATH && ! -L $VENDOR_PATH ]]; then
+    echo "WARNING:    $(vendor_missing_hint)"
+  fi
   echo "list:       ${LIST_FILE}"
   if [[ -f $LIST_FILE ]]; then
     echo "vmids:"
@@ -491,23 +530,26 @@ uninstall() {
   local purge="${1:-}"
   # Validate before changing anything: a refused purge must not half-uninstall.
   if [[ $purge == "--purge" ]]; then
-    # Reject traversal and non-canonical paths outright, then allow only a
-    # directory below /opt, /srv or /usr/local (but not the standard
-    # /usr/local subdirectories that hold other software).
+    # Reject non-canonical paths outright (empty, "..", "//", a trailing "/",
+    # a "." component such as "/./" or a trailing "/."), so that nothing can
+    # slip past the allow-list or the system-directory list below by spelling.
+    # PREFIX is a directory below /opt, /srv or /usr/local (but not the
+    # standard /usr/local subdirectories that hold other software).
     case "$PREFIX" in
-      *..*|*//*|*/) die "refusing to purge PREFIX=${PREFIX} (non-canonical path)" ;;
+      ""|*..*|*//*|*/|*/./*|*/.) die "refusing to purge PREFIX=${PREFIX} (non-canonical path)" ;;
       /usr/local/bin|/usr/local/sbin|/usr/local/lib|/usr/local/lib64|/usr/local/etc|/usr/local/share|/usr/local/include|/usr/local/src|/usr/local/man|/usr/local/games)
         die "refusing to purge PREFIX=${PREFIX} (system directory)" ;;
       /opt/?*|/usr/local/?*|/srv/?*) ;;
       *) die "refusing to purge PREFIX=${PREFIX} (must be under /opt, /usr/local or /srv)" ;;
     esac
-    # LIST_FILE is env-overridable and also gets rm -rf'd: it must be a file
-    # path under /etc/qemu-ad, /opt, /srv, /var/lib/qemu-ad or /usr/local.
+    # LIST_FILE is a single file, removed with rm -f: it must be a canonical
+    # path to a file inside /etc/qemu-ad or /var/lib/qemu-ad, never a directory.
     case "$LIST_FILE" in
-      *..*|*//*|*/) die "refusing to purge LIST_FILE=${LIST_FILE} (non-canonical path)" ;;
-      /etc/qemu-ad/?*|/opt/?*|/srv/?*|/var/lib/qemu-ad/?*|/usr/local/?*) ;;
-      *) die "refusing to purge LIST_FILE=${LIST_FILE} (must be a file under /etc/qemu-ad, /var/lib/qemu-ad, /opt, /srv or /usr/local)" ;;
+      ""|*..*|*//*|*/|*/./*|*/.) die "refusing to purge LIST_FILE=${LIST_FILE} (non-canonical path)" ;;
+      /etc/qemu-ad/?*|/var/lib/qemu-ad/?*) ;;
+      *) die "refusing to purge LIST_FILE=${LIST_FILE} (must be a file under /etc/qemu-ad or /var/lib/qemu-ad)" ;;
     esac
+    [[ ! -d $LIST_FILE ]] || die "refusing to purge LIST_FILE=${LIST_FILE} (is a directory)"
   fi
   if dpkg-divert --list "$WRAPPER_PATH" | grep -q "$VENDOR_PATH"; then
     say "removing divert and restoring ${WRAPPER_PATH}"
@@ -527,7 +569,8 @@ uninstall() {
   fi
   if [[ $purge == "--purge" ]]; then
     say "removing ${PREFIX} and ${LIST_FILE}"
-    rm -rf "$PREFIX" "$LIST_FILE"
+    rm -rf "$PREFIX"
+    rm -f "$LIST_FILE"
   else
     say "left ${PREFIX} in place (pass --purge to remove)"
   fi
@@ -568,7 +611,22 @@ usage: $0 <command> [args]
   uninstall          restore /usr/bin/kvm, keep ${PREFIX}
   uninstall --purge  also remove ${PREFIX} and the VMID list
 
-env: QEMU_VER PREFIX SRC_ROOT FORCE_REBUILD=1
+env overrides (set in the environment, e.g. QEMU_VER=10.2.2 $0 install):
+  QEMU_VER        QEMU version to build (default ${QEMU_VER})
+  PREFIX          install prefix of the side QEMU (default ${PREFIX}); purged by --purge
+  SRC_ROOT        where sources are fetched and unpacked (default ${SRC_ROOT})
+  PATCH_REPO      git URL of the patch repository
+  TARBALL_URL     QEMU source tarball URL
+  QEMU_SHA256     expected SHA-256 of the tarball (built-in pin for 10.2.2)
+  PATCH_SHA256    expected SHA-256 of the patch file (built-in pin for 10.2.2)
+  FORCE_REBUILD   1 = rebuild even if the side binary exists
+  LIST_FILE       VMID list (default ${LIST_FILE}); purged by --purge
+  WRAPPER_PATH    wrapper location (default ${WRAPPER_PATH})
+  VENDOR_PATH     where the vendor binary is diverted to (default ${VENDOR_PATH})
+  LOG_FILE        wrapper log (default ${LOG_FILE})
+  DPKG_LOCK       dpkg lock file checked before touching the divert (default ${DPKG_LOCK})
+--purge only accepts PREFIX under /opt, /srv or /usr/local and LIST_FILE as a
+file under /etc/qemu-ad or /var/lib/qemu-ad (canonical paths, no "." or "..").
 EOF
 }
 

@@ -114,7 +114,7 @@ chk "C4b --version and -h routed to vendor"                 '[[ $(K --version) =
 rm -f "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
 chk "C4c no list file: everything to vendor"                '[[ $o == REAL* ]]'
 printf '200\r\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
-chk "C4d CRLF list entry does not match (falls back to vendor, safe)" '[[ $o == REAL* ]]'
+chk "C4d CRLF list entry '200\\r' now matches (N3: routes to side)" '[[ $o == SIDE* ]]'
 printf '200\n' > "$T/vms"; command rm -f "$W/side.bak"; mv "$W/side" "$W/side.bak"
 K -pidfile /var/run/qemu-server/200.pid >/dev/null 2>&1; rc=$?; mv "$W/side.bak" "$W/side"
 chk "C4e listed + missing side binary: loud failure (rc!=0), unlisted unaffected" '[[ $rc -ne 0 && $(K -pidfile /var/run/qemu-server/201.pid) == REAL* ]]'
@@ -128,7 +128,7 @@ done
 for p in /opt/qemu-ad /usr/local/qemu-ad /srv/qad; do
   r=$(purge "$p"); chk "C5 allow PREFIX='$p'" '[[ $r -eq 0 && -s $T/rm.log ]]'
 done
-for p in /opt/../usr /opt/qemu-ad/../.. /usr/local/bin /usr/local/../../etc; do
+for p in /opt/../usr /opt/qemu-ad/../.. /usr/local/bin /usr/local/../../etc /usr/local/./bin /usr/local/./share /opt/. /opt/./x /opt/qemu-ad/. /opt/qemu-ad/./ /usr/local/bin/. /./opt/x /opt/qemu-ad/.. /usr/local/sbin /srv/. /srv/./qad; do
   r=$(purge "$p"); if [[ $r -ne 0 && ! -s $T/rm.log ]]; then ok "C5 reject traversal/system dir PREFIX='$p'"; else bad "C5 GUARD BYPASS PREFIX='$p' would rm: $(cat "$T/rm.log" 2>/dev/null | head -1)"; fi
 done
 fresh; L 'install_wrapper' >/dev/null 2>&1; r=$(PREFIX=/usr L 'uninstall --purge' >/dev/null 2>&1; echo $?)
@@ -252,7 +252,7 @@ chk "C8q del-vm of the last id: ok, empty list (grep exit 1 tolerated)" '[[ $rc 
 fresh; printf '200\n' > "$T/vms"
 cat > "$W/stub/grep" <<'S'
 #!/bin/bash
-[[ $1 == -vx ]] && exit 2; exec /bin/grep "$@"
+[[ $1 == -vx* ]] && exit 2; exec /bin/grep "$@"
 S
 chmod +x "$W/stub/grep"; L 'del_vm 200' >/dev/null 2>&1; rc=$?
 chk "C8r grep hard error: fatal, list unchanged, no temp left" '[[ $rc -ne 0 && $(cat $T/vms) == 200 && $(ls $T | grep -c "^vms\.") -eq 0 ]]'
@@ -354,10 +354,17 @@ else note "C9d-h skipped: no C compiler"; fi
 fresh; mkw
 printf '# comment\n\n200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9i bare VMID among comment/blank lines still routes to side" '[[ $o == SIDE* ]]'
 printf '# 200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9i '# 200' (commented out) does not match -> vendor" '[[ $o == REAL* ]]'
-printf '200 \n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); note "C9j KNOWN LIMITATION (documented in README): trailing space '200 ' silently falls back to vendor: ${o%% *}"
-printf ' 200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); note "C9j KNOWN LIMITATION: leading space ' 200' falls back to vendor: ${o%% *}"
-printf '200\r\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); note "C9j KNOWN LIMITATION: CRLF '200\\r' falls back to vendor: ${o%% *}"
-chk "C9j known-limitation lines all fall back to VENDOR (never to side, never a crash)" '[[ $(printf "200 \n" > $T/vms; K -pidfile /var/run/qemu-server/200.pid) == REAL* && $(printf " 200\n" > $T/vms; K -pidfile /var/run/qemu-server/200.pid) == REAL* && $(printf "200\r\n" > $T/vms; K -pidfile /var/run/qemu-server/200.pid) == REAL* ]]'
+# N3: whitespace and CR around the VMID are tolerated (they used to fall back to vendor and were INFO)
+for pair in '200 |trailing space' ' 200|leading space' ' 200 |leading+trailing space' '200\r|CR (CRLF line ending)' '200 \r|space then CR' '\t200\t|tabs'; do
+  content=${pair%%|*}; label=${pair#*|}
+  printf "$content\n" > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
+  chk "C9j N3 list line with $label routes to SIDE" '[[ $o == SIDE* ]]'
+done
+printf '200\r\n201\r\n' > "$T/vms"
+chk "C9j N3 CRLF file: 200 -> SIDE, 201 -> SIDE, 20 and 2000 -> REAL (no prefix/suffix match)" '[[ $(K -pidfile /var/run/qemu-server/200.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/201.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/20.pid) == REAL* && $(K -pidfile /var/run/qemu-server/2000.pid) == REAL* ]]'
+printf '200' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9j N3 last line without newline matches" '[[ $o == SIDE* ]]'
+printf '200 # note\n2000\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
+chk "C9j trailing comment text still does NOT match (documented: bare VMID only) -> vendor, never a crash" '[[ $o == REAL* ]]'
 if [[ $(id -u) -ne 0 ]]; then printf '200\n' > "$T/vms"; chmod 000 "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid 2>/dev/null); rc=$?; chmod 644 "$T/vms"
   chk "C9k unreadable list file: no crash, falls back to vendor" '[[ $rc -eq 0 && $o == REAL* ]]'
 else note "C9k skipped: running as root, chmod 000 does not make the list unreadable"; fi
@@ -416,20 +423,111 @@ fi
 # --- 7. purge also guards LIST_FILE
 purge2() { fresh; PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ echo \"RM \$*\" >> '$T/rm.log'; }
    PREFIX=/opt/qemu-ad LIST_FILE='$1' WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" >/dev/null 2>&1; echo $?; }
-for lf in / /etc /etc/passwd /usr/bin/kvm /root/.ssh/authorized_keys relative/vms /etc/qemu-ad/../passwd /etc/qemu-ad/ /home/x/vms; do
+for lf in / /etc /etc/passwd /usr/bin/kvm /root/.ssh/authorized_keys relative/vms /etc/qemu-ad/../passwd /etc/qemu-ad/ /home/x/vms \
+  /usr/local/bin /usr/local/share /usr/local/lib /usr/local/vms /usr/local/qemu-ad/vms /opt/qemu-ad /opt/qad/vms /srv/qad/vms /srv/x \
+  /etc/qemu-ad/. /etc/qemu-ad/./vms /var/lib/qemu-ad/. /var/lib/qemu-ad/./vms /etc/qemu-ad//vms /etc/qemu-ad/sub/.. /etc/qemu-ad/vms/ /etc/qemu-ad/vms/. /./etc/qemu-ad/vms /etc/qemu-ad /var/lib/qemu-ad; do
   r=$(purge2 "$lf"); chk "C10 purge rejects LIST_FILE='$lf' before any rm" '[[ $r -ne 0 && ! -s $T/rm.log ]]'
 done
-for lf in /etc/qemu-ad/vms /var/lib/qemu-ad/vms /opt/qad/vms; do
-  r=$(purge2 "$lf"); chk "C10 purge allows LIST_FILE='$lf'" '[[ $r -eq 0 && -s $T/rm.log ]]'
+for lf in /etc/qemu-ad/vms /var/lib/qemu-ad/vms /etc/qemu-ad/lists/vms; do
+  r=$(purge2 "$lf"); chk "C10 purge allows LIST_FILE='$lf' (removed with rm -f, not -rf)" '[[ $r -eq 0 && -s $T/rm.log ]] && grep -qx "RM -f $lf" "$T/rm.log" && ! grep -q "^RM -rf.* $lf" "$T/rm.log"'
 done
+
+# --- 10. N1 (more): directories refused; LIST_FILE removed with rm -f only; PREFIX non-canonical forms
+if [[ $HAVE_USERNS -eq 1 ]] && unshare -Urm bash -c 'mount -t tmpfs none /etc' 2>/dev/null; then
+  fresh
+  r=$(unshare -Urm env PATH="$W/stub:$PATH" bash -c "mount -t tmpfs none /etc && mkdir -p /etc/qemu-ad/adir /etc/qemu-ad && source '$W/lib.sh'; set -euo pipefail; rm(){ echo \"RM \$*\" >> '$T/rm.log'; }
+     PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/adir WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" >/dev/null 2>&1; echo $?)
+  chk "C10 purge refuses a LIST_FILE that is an existing directory (/etc/qemu-ad/adir)" '[[ $r -ne 0 && ! -s $T/rm.log ]]'
+  fresh
+  r=$(unshare -Urm env PATH="$W/stub:$PATH" bash -c "mount -t tmpfs none /etc && mkdir -p /etc/qemu-ad && : > /etc/qemu-ad/vms && source '$W/lib.sh'; set -euo pipefail; rm(){ echo \"RM \$*\" >> '$T/rm.log'; }
+     PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/vms WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" >/dev/null 2>&1; echo $?)
+  chk "C10 purge of an existing regular LIST_FILE works (control for the directory case)" '[[ $r -eq 0 ]] && grep -qx "RM -f /etc/qemu-ad/vms" "$T/rm.log"'
+else note "C10 directory-refusal case skipped: cannot mount a tmpfs over /etc in a user namespace"; fi
 
 # --- 8. add-vm rejects 0 / leading zeros
 for v in 0 00 007 0200; do fresh; L "add_vm $v" >/dev/null 2>&1; rc=$?; chk "C11 add-vm rejects '$v'" '[[ $rc -ne 0 ]] && ! grep -qx "$v" "$T/vms" 2>/dev/null'; done
 
+# --- 11. N3: one list-matching helper, used by wrapper, add-vm, del-vm, showcmd
+fresh; printf '200\r\n' > "$T/vms"; L 'add_vm 200' >/dev/null 2>&1; rc=$?
+chk "N3 add-vm on a CRLF list does not append a duplicate" '[[ $rc -eq 0 && $(wc -l < "$T/vms") -eq 1 ]]'
+for c in '200 ' ' 200' '\t200 \r'; do
+  fresh; printf "$c\n" > "$T/vms"; L 'add_vm 200' >/dev/null 2>&1
+  chk "N3 add-vm: no duplicate for line '$c'" '[[ $(wc -l < "$T/vms") -eq 1 ]]'
+done
+fresh; printf '200\r\n201\r\n202\r\n' > "$T/vms"; L 'del_vm 201' >/dev/null 2>&1; rc=$?
+chk "N3 del-vm removes the CRLF line for 201 and keeps the others byte-exact" '[[ $rc -eq 0 && $(od -An -c "$T/vms" | tr -d " \n") == "200\r\n202\r\n" ]]'
+for c in '201 ' ' 201' '\t201\t'; do
+  fresh; printf "200\n$c\n202\n" > "$T/vms"; L 'del_vm 201' >/dev/null 2>&1
+  chk "N3 del-vm removes padded line '$c'" '[[ $(tr "\n" " " < "$T/vms") == "200 202 " ]]'
+done
+fresh; printf '2000\r\n20\r\n' > "$T/vms"; L 'del_vm 200' >/dev/null 2>&1
+chk "N3 del-vm 200 does not touch 2000 / 20" '[[ $(tr -d "\r" < "$T/vms" | tr "\n" " ") == "2000 20 " ]]'
+fresh; printf '200' > "$T/vms"; L 'add_vm 201' >/dev/null 2>&1
+chk "N3 add-vm onto a list whose last line has no newline keeps both ids on their own lines" '[[ $(tr "\n" " " < "$T/vms") == "200 201 " ]]'
+fresh; cat > "$W/stub/qm" <<'S'
+#!/bin/bash
+[[ $1 == showcmd ]] || exit 0
+printf '/usr/bin/kvm \\\n  -id 200 \\\n  -pidfile /var/run/qemu-server/200.pid\n'
+S
+chmod +x "$W/stub/qm"
+o=$(L 'printf "200\r\n" > "$LIST_FILE"; showcmd 200' 2>&1)
+chk "N3 showcmd treats a CRLF list line as listed" '[[ $o == *"IS listed"* ]]'
+o=$(L 'printf " 200 \n" > "$LIST_FILE"; showcmd 200' 2>&1)
+chk "N3 showcmd treats a padded list line as listed" '[[ $o == *"IS listed"* ]]'
+command rm -f "$W/stub/qm"
+fresh; L 'write_wrapper "$WRAPPER_PATH"' >/dev/null
+chk "N3 wrapper embeds the shared list-matching helper (no private grep -qx)" 'grep -q "^qad_list_has" "$T/kvm" && ! grep -q "grep -qx \"" "$T/kvm"'
+
+# --- 12. N4: missing / unwritable log dir must not write anything to stderr and must not change routing/rc
+mkw; printf '200\n' > "$T/vms"; sed -i "s#^log=.*#log=$T/nodir/sub/log#" "$T/kvm"
+o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e1"); rc=$?
+chk "N4 listed VM, log dir missing: stdout from side, rc 0" '[[ $o == SIDE* && $rc -eq 0 ]]'
+chk "N4 listed VM, log dir missing: stderr is EMPTY" '[[ ! -s $T/e1 ]]'
+o=$(K -pidfile /var/run/qemu-server/201.pid 2>"$T/e2"); chk "N4 unlisted VM: stderr empty, vendor" '[[ $o == REAL* && ! -s $T/e2 ]]'
+mkdir -p "$T/ro"; chmod 555 "$T/ro"; sed -i "s#^log=.*#log=$T/ro/log#" "$T/kvm"
+if [[ $(id -u) -ne 0 ]]; then
+  o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e3"); rc=$?
+  chk "N4 log dir not writable: still silent, still starts on side" '[[ $o == SIDE* && $rc -eq 0 && ! -s $T/e3 ]]'
+fi
+mkdir -p "$T/logdir"; sed -i "s#^log=.*#log=$T/logdir#" "$T/kvm"
+o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e4"); rc=$?
+chk "N4 log path is a directory: silent, still starts" '[[ $o == SIDE* && $rc -eq 0 && ! -s $T/e4 ]]'
+mkdir -p "$T/okdir"; sed -i "s#^log=.*#log=$T/okdir/log#" "$T/kvm"
+K -pidfile /var/run/qemu-server/200.pid >/dev/null 2>&1
+chk "N4 control: with a writable log dir the line IS logged" 'grep -q "vmid=200 exec" "$T/okdir/log"'
+# the wrapper must not fail even under bash -e/-u (qm may run it that way via a different shell option set)
+o=$(bash -eu "$T/kvm" -pidfile /var/run/qemu-server/200.pid 2>&1); chk "N4 wrapper run under bash -eu with a good log is fine" '[[ $o == SIDE* ]]'
+
+# --- 13. N5: recovery hint when pve-qemu-kvm was removed while the divert exists
+fresh; L 'install_wrapper' >/dev/null 2>&1; command rm -f "$T/kvm.pve"   # what `apt remove pve-qemu-kvm` does
+L 'uninstall' >/dev/null 2>"$W/n5.err"; rc=$?
+chk "N5 uninstall with vendor binary gone: refuses (rc!=0), wrapper and divert untouched" '[[ $rc -ne 0 ]] && grep -q "Generated by qemu-ad-pve" "$T/kvm" && [[ -f $T/div ]]'
+chk "N5 uninstall message tells how to recover (reinstall pve-qemu-kvm, then re-run uninstall)" 'grep -qi "reinstall" "$W/n5.err" && grep -q "pve-qemu-kvm" "$W/n5.err" && grep -q "uninstall" "$W/n5.err"'
+L 'install_wrapper' >/dev/null 2>"$W/n5b.err"; rc=$?
+chk "N5 re-running install in that state: refuses with the same recovery hint" '[[ $rc -ne 0 ]] && grep -qi "reinstall" "$W/n5b.err" && grep -q "pve-qemu-kvm" "$W/n5b.err"'
+o=$(L 'status' 2>&1)
+chk "N5 status warns when the divert exists but the vendor binary is missing" '[[ $o == *"WARNING"* && $o == *"reinstall"* ]]'
+printf 'vendor-reinstalled\n' > "$T/kvm.pve"   # apt install pve-qemu-kvm: dpkg writes the diverted path
+L 'uninstall' >/dev/null 2>&1; rc=$?
+chk "N5 after reinstalling the package, uninstall succeeds and restores the vendor binary" '[[ $rc -eq 0 ]] && grep -qx vendor-reinstalled "$T/kvm"'
+fresh; L 'install_wrapper' >/dev/null 2>&1; o=$(L 'status' 2>&1)
+chk "N5 status: no warning in the healthy state" '[[ $o != *"WARNING"* ]]'
+
+# --- 14. N2: stale header comments / usage()
+chk "N2 header no longer says hidden=1 clears the hypervisor bit" '! sed -n 1,70p "$SCRIPT" | grep -qi "hypervisor bit clear" && sed -n 1,70p "$SCRIPT" | grep -q "kvm=off"'
+chk "N2 header no longer says +pve is stripped from each argument" '! sed -n 1,70p "$SCRIPT" | grep -qi "from each argument" && sed -n 1,70p "$SCRIPT" | grep -qi -- "-machine"'
+u=$(bash "$SCRIPT" help 2>&1)
+m=0; for k in $(sed -n 's/^\([A-Z][A-Z0-9_]*\)="\${\1:-.*/\1/p' "$SCRIPT") DPKG_LOCK; do [[ $u == *"$k"* ]] || { echo "usage() lacks $k"; m=1; }; done
+chk "N2 usage() lists every env knob the script reads (derived from the script, plus DPKG_LOCK)" '[[ $m -eq 0 ]]'
+chk "N2 usage() documents DPKG_LOCK" '[[ $u == *DPKG_LOCK* ]]'
+chk "N2 usage() / header no longer claim CRLF falls back to vendor" '! grep -qi "silently fall back" "$(dirname "$SCRIPT")/README.md"'
+
 # --- 9. docs: list format and overrides documented
 chk "C12a README documents the list file format" 'grep -qi "one .*VMID per line" "$(dirname "$SCRIPT")/README.md" && grep -qi "CRLF" "$(dirname "$SCRIPT")/README.md"'
-chk "C12b README Overrides list covers every env knob" 'for k in QEMU_VER PREFIX SRC_ROOT FORCE_REBUILD PATCH_REPO TARBALL_URL LIST_FILE WRAPPER_PATH VENDOR_PATH LOG_FILE QEMU_SHA256 PATCH_SHA256; do grep -q "\`$k\`" "$(dirname "$SCRIPT")/README.md" || { echo "missing $k"; exit 1; }; done'
+chk "C12b README Overrides list covers every env knob (incl. DPKG_LOCK)" 'm=0; for k in QEMU_VER PREFIX SRC_ROOT FORCE_REBUILD PATCH_REPO TARBALL_URL LIST_FILE WRAPPER_PATH VENDOR_PATH LOG_FILE QEMU_SHA256 PATCH_SHA256 DPKG_LOCK; do grep -q "\`$k\`" "$(dirname "$SCRIPT")/README.md" || { echo "missing $k"; m=1; }; done; [[ $m -eq 0 ]]'
 chk "C12c README no longer claims hidden=1 clears the hypervisor bit" '! grep -qi "clears the hypervisor bit" "$(dirname "$SCRIPT")/README.md"'
+chk "C12d README no longer lists CRLF / padded lines as a known limitation" '! grep -qi "silently fall back to the vendor binary" "$(dirname "$SCRIPT")/README.md" && grep -qi "CRLF" "$(dirname "$SCRIPT")/README.md"'
+chk "C12e README has the apt-remove recovery hint" 'grep -qi "reinstall" "$(dirname "$SCRIPT")/README.md" && grep -qi "pve-qemu-kvm" "$(dirname "$SCRIPT")/README.md" && grep -qi "was removed\|already removed\|already ran" "$(dirname "$SCRIPT")/README.md"'
 
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

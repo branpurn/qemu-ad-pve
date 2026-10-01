@@ -265,7 +265,12 @@ install_wrapper() {
     say "divert already in place"
   fi
   [[ -e $VENDOR_PATH ]] || die "divert claimed success but ${VENDOR_PATH} is missing"
-  mv -f "$staged" "$WRAPPER_PATH"
+  if ! mv -f "$staged" "$WRAPPER_PATH"; then
+    # The divert already moved the vendor binary aside. Undo it so the
+    # host is not left without a kvm binary.
+    dpkg-divert --local --rename --remove "$WRAPPER_PATH" || true
+    die "could not install wrapper; divert rolled back"
+  fi
   say "wrapper installed. VMIDs in ${LIST_FILE} use ${SIDE_BIN}"
 }
 
@@ -338,6 +343,19 @@ status() {
 
 uninstall() {
   local purge="${1:-}"
+  # Validate before changing anything: a refused purge must not half-uninstall.
+  if [[ $purge == "--purge" ]]; then
+    # Reject traversal and non-canonical paths outright, then allow only a
+    # directory below /opt, /srv or /usr/local (but not the standard
+    # /usr/local subdirectories that hold other software).
+    case "$PREFIX" in
+      *..*|*//*|*/) die "refusing to purge PREFIX=${PREFIX} (non-canonical path)" ;;
+      /usr/local/bin|/usr/local/sbin|/usr/local/lib|/usr/local/lib64|/usr/local/etc|/usr/local/share|/usr/local/include|/usr/local/src|/usr/local/man|/usr/local/games)
+        die "refusing to purge PREFIX=${PREFIX} (system directory)" ;;
+      /opt/?*|/usr/local/?*|/srv/?*) ;;
+      *) die "refusing to purge PREFIX=${PREFIX} (must be under /opt, /usr/local or /srv)" ;;
+    esac
+  fi
   if dpkg-divert --list "$WRAPPER_PATH" | grep -q "$VENDOR_PATH"; then
     say "removing divert and restoring ${WRAPPER_PATH}"
     # Move the wrapper aside instead of deleting it, so a failed
@@ -354,10 +372,6 @@ uninstall() {
     say "no divert to remove"
   fi
   if [[ $purge == "--purge" ]]; then
-    case "$PREFIX" in
-      /opt/?*|/usr/local/?*|/srv/?*) ;;
-      *) die "refusing to purge PREFIX=${PREFIX} (must be under /opt, /usr/local or /srv)" ;;
-    esac
     say "removing ${PREFIX} and ${LIST_FILE}"
     rm -rf "$PREFIX" "$LIST_FILE"
   else

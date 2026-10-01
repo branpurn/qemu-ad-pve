@@ -53,7 +53,15 @@ qm start 200
 | `uninstall` | Restore `/usr/bin/kvm`, leave `/opt/qemu-ad` |
 | `uninstall --purge` | Also remove `/opt/qemu-ad` and the VMID list |
 
-Overrides: `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD=1`. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+Overrides: `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD=1`, `QEMU_SHA256`, `PATCH_SHA256`. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+
+`install` checks the QEMU tarball and the patch file against pinned SHA-256 values for 10.2.2 and stops on a mismatch. For another `QEMU_VER` there is no built-in pin: the script warns and continues, or you can export `QEMU_SHA256` and `PATCH_SHA256` to enforce your own. `status` and a repeated `install` warn if the built side binary does not report `QEMU_VER`; set `FORCE_REBUILD=1` to rebuild.
+
+## Do not `apt remove pve-qemu-kvm` while diverted
+
+With the divert active, `pve-qemu-kvm` owns `/usr/bin/kvm.pve`, and the wrapper at `/usr/bin/kvm` is not part of the package. Removing the package deletes `kvm.pve` but leaves the wrapper behind. Every guest that is not in `/etc/qemu-ad/vms` then fails to start, because the wrapper has no vendor binary to hand off to. Upgrades and reinstalls of `pve-qemu-kvm` are fine.
+
+To remove the package, run `./qemu-ad-pve.sh uninstall` first, then remove it. To bring the setup back after a reinstall, run `./qemu-ad-pve.sh install` again (the build is reused).
 
 ## Upstream
 

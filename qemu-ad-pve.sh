@@ -77,6 +77,20 @@ WRAPPER_PATH="${WRAPPER_PATH:-/usr/bin/kvm}"
 VENDOR_PATH="${VENDOR_PATH:-/usr/bin/kvm.pve}"
 LOG_FILE="${LOG_FILE:-/var/log/qemu-ad-wrapper.log}"
 
+# Integrity pins. Known-good SHA-256 for the versions this script has been
+# checked against (tarball verified against QEMU's signed release too). For
+# any other QEMU_VER, export QEMU_SHA256 and PATCH_SHA256 yourself; with no
+# pin the script warns and carries on. A pin that does not match is fatal.
+case "$QEMU_VER" in
+  10.2.2)
+    _def_qemu_sha=784b296ff29c1417aa72323abcb2d2ea9ab9771724f577dcd785c3b04f21e176
+    _def_patch_sha=0d05f1a0ced91cef3fe33203b7d81c955d64694f30085544dc5e154809da110e
+    ;;
+  *) _def_qemu_sha=""; _def_patch_sha="" ;;
+esac
+QEMU_SHA256="${QEMU_SHA256:-$_def_qemu_sha}"
+PATCH_SHA256="${PATCH_SHA256:-$_def_patch_sha}"
+
 SIDE_BIN="${PREFIX}/bin/qemu-system-x86_64"
 PATCH_DIR="${SRC_ROOT}/qemu-anti-detection"
 SRC_DIR="${SRC_ROOT}/qemu-${QEMU_VER}"
@@ -102,12 +116,30 @@ have_pve() { command -v qm >/dev/null 2>&1 && command -v pveversion >/dev/null 2
 install_deps() {
   say "installing build dependencies"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
+  # A broken extra repo (for example an enterprise repo with no subscription)
+  # makes `apt-get update` exit non-zero. The install below still works from
+  # the existing package lists, so warn instead of aborting.
+  apt-get update || echo "warning: apt-get update failed; continuing with existing package lists" >&2
   apt-get install -y \
     git wget ca-certificates build-essential ninja-build pkg-config \
     python3 python3-venv meson flex bison \
     libglib2.0-dev libpixman-1-dev zlib1g-dev \
     libaio-dev liburing-dev
+}
+
+# verify_sha256 <file> <expected-or-empty> <label> <knob-name>
+verify_sha256() {
+  local file="$1" want="$2" label="$3" knob="$4" got
+  if [[ -z $want ]]; then
+    echo "warning: no pinned SHA-256 for ${label}; set ${knob} to enforce one" >&2
+    return 0
+  fi
+  got=$(sha256sum "$file" | awk '{print $1}')
+  [[ $got == "$want" ]] || die "SHA-256 mismatch for ${label}
+  expected ${want}
+  got      ${got}
+Delete the file and retry, or set ${knob} if you intend to use a different one."
+  say "${label}: SHA-256 ok"
 }
 
 fetch_sources() {
@@ -122,15 +154,37 @@ fetch_sources() {
   [[ -f $PATCH_FILE ]] || die "no patch for QEMU ${QEMU_VER} at ${PATCH_FILE}
 available patches:
 $(ls -1 "${PATCH_DIR}"/qemu-*.patch 2>/dev/null || echo '  (none)')"
+  verify_sha256 "$PATCH_FILE" "$PATCH_SHA256" "patch qemu-${QEMU_VER}.patch" PATCH_SHA256
 
   local tarball="${SRC_ROOT}/qemu-${QEMU_VER}.tar.xz"
   if [[ ! -f $tarball ]]; then
     say "downloading ${TARBALL_URL}"
-    wget -O "$tarball" "$TARBALL_URL"
+    # Download to a .part name so an interrupted transfer is never mistaken
+    # for a finished tarball on the next run.
+    command rm -f "${tarball}.part"
+    if ! wget -O "${tarball}.part" "$TARBALL_URL"; then
+      command rm -f "${tarball}.part"
+      die "download failed: ${TARBALL_URL}"
+    fi
+    mv -f "${tarball}.part" "$tarball"
   fi
+  verify_sha256 "$tarball" "$QEMU_SHA256" "tarball qemu-${QEMU_VER}.tar.xz" QEMU_SHA256
   if [[ ! -d $SRC_DIR ]]; then
     say "extracting qemu-${QEMU_VER}"
-    tar -C "$SRC_ROOT" -xJf "$tarball"
+    # Extract into a scratch dir and rename, so an interrupted extract does
+    # not leave a half-populated $SRC_DIR that later runs would trust.
+    local tmpx
+    tmpx=$(mktemp -d "${SRC_ROOT}/.extract.XXXXXX")
+    if ! tar -C "$tmpx" -xJf "$tarball"; then
+      command rm -rf "$tmpx"
+      die "extract failed; delete ${tarball} and retry"
+    fi
+    if [[ ! -d ${tmpx}/qemu-${QEMU_VER} ]]; then
+      command rm -rf "$tmpx"
+      die "tarball did not contain qemu-${QEMU_VER}/"
+    fi
+    mv "${tmpx}/qemu-${QEMU_VER}" "$SRC_DIR"
+    command rm -rf "$tmpx"
   fi
 }
 
@@ -145,15 +199,28 @@ apply_patch() {
   fi
   say "applying ${PATCH_FILE}"
   # -p1 is what `git apply` expects for a diff generated from the qemu repo.
-  # --reject leaves .rej files instead of a half-applied tree we cannot see.
+  # --check first: a patch that does not apply cleanly fails here, before
+  # anything in the tree is modified.
   git -C "$SRC_DIR" apply --check "$PATCH_FILE"
   git -C "$SRC_DIR" apply "$PATCH_FILE"
   date -Is > "$stamp"
 }
 
+# The installed side binary can differ from QEMU_VER (for example after an
+# earlier install with another version). Warn; do not rebuild implicitly.
+warn_version_skew() {
+  [[ -x $SIDE_BIN ]] || return 0
+  local have
+  have=$("$SIDE_BIN" --version 2>/dev/null | head -1) || true
+  if [[ $have != *"version ${QEMU_VER}"* ]]; then
+    echo "warning: installed side binary reports '${have:-unknown}', expected QEMU ${QEMU_VER}; set FORCE_REBUILD=1 to rebuild" >&2
+  fi
+}
+
 build_qemu() {
   if [[ -x $SIDE_BIN && ${FORCE_REBUILD:-0} -ne 1 ]]; then
     say "side binary already installed at ${SIDE_BIN} (set FORCE_REBUILD=1 to redo)"
+    warn_version_skew
     return 0
   fi
   say "configuring QEMU ${QEMU_VER} with prefix ${PREFIX}"
@@ -201,10 +268,10 @@ write_wrapper() {
 #!/bin/bash
 # Generated by qemu-ad-pve.sh. Do not edit in place; re-run the installer.
 # Listed VMIDs exec the side QEMU. Everything else execs the vendor binary.
-real=${VENDOR_PATH}
-side=${SIDE_BIN}
-list=${LIST_FILE}
-log=${LOG_FILE}
+real=$(printf '%q' "$VENDOR_PATH")
+side=$(printf '%q' "$SIDE_BIN")
+list=$(printf '%q' "$LIST_FILE")
+log=$(printf '%q' "$LOG_FILE")
 
 id=""
 for a in "\$@"; do
@@ -276,7 +343,7 @@ install_wrapper() {
 
 add_vm() {
   local id="${1:-}"
-  [[ $id =~ ^[0-9]+$ ]] || die "add-vm needs a numeric VMID"
+  [[ $id =~ ^[1-9][0-9]*$ ]] || die "add-vm needs a numeric VMID (no leading zeros)"
   install -d "$(dirname "$LIST_FILE")"
   [[ -f $LIST_FILE ]] || : > "$LIST_FILE"
   if grep -qx "$id" "$LIST_FILE"; then
@@ -290,12 +357,20 @@ add_vm() {
 
 del_vm() {
   local id="${1:-}"
-  [[ $id =~ ^[0-9]+$ ]] || die "del-vm needs a numeric VMID"
+  [[ $id =~ ^[1-9][0-9]*$ ]] || die "del-vm needs a numeric VMID (no leading zeros)"
   [[ -f $LIST_FILE ]] || die "no list at ${LIST_FILE}"
-  local tmp
-  tmp=$(mktemp)
-  grep -vx "$id" "$LIST_FILE" > "$tmp" || true
-  mv "$tmp" "$LIST_FILE"
+  # Temp file beside the list so the final mv is an atomic same-filesystem
+  # rename. grep exits 1 when nothing is left (fine) and 2 on a real error
+  # (fatal, list untouched). Keep the original file mode.
+  local tmp rc=0
+  tmp=$(mktemp "${LIST_FILE}.XXXXXX")
+  grep -vx "$id" "$LIST_FILE" > "$tmp" || rc=$?
+  if (( rc > 1 )); then
+    command rm -f "$tmp"
+    die "could not rewrite ${LIST_FILE}; left unchanged"
+  fi
+  chmod --reference="$LIST_FILE" "$tmp"
+  mv -f "$tmp" "$LIST_FILE"
   say "VMID ${id} removed; next start uses the vendor binary"
 }
 
@@ -318,6 +393,7 @@ status() {
   echo "side bin:   ${SIDE_BIN}"
   if [[ -x $SIDE_BIN ]]; then
     echo "side ver:   $($SIDE_BIN --version | head -1)"
+    warn_version_skew
   else
     echo "side ver:   (not built)"
   fi

@@ -261,6 +261,28 @@ build_qemu() {
 # +pveN is a Proxmox machine-type revision vanilla QEMU rejects. It is
 # stripped only on the side-binary path. The vendor path is argv-identical.
 # ---------------------------------------------------------------------------
+# qad_side_args "$@": build SIDE_ARGS, the argv a vanilla QEMU accepts, from
+# the argv qemu-server built for pve-qemu-kvm. Anything dropped is listed in
+# SIDE_DROPPED. This one function is embedded verbatim in the generated
+# wrapper (declare -f) and also used by `showcmd`, so the two cannot drift.
+#   -id <vmid>       vendor-only dummy option (pve-qemu patch); vanilla has none
+#   +pveN            vendor machine-type revision, stripped only inside the
+#                    value of -machine / -M
+qad_side_args() {
+  SIDE_ARGS=()
+  SIDE_DROPPED=()
+  local a prev="" skip=0
+  for a in "$@"; do
+    if (( skip )); then skip=0; prev=$a; continue; fi
+    if [[ $a == -id ]]; then SIDE_DROPPED+=("-id"); skip=1; prev=$a; continue; fi
+    if [[ $prev == -machine || $prev == -M ]]; then
+      while [[ $a =~ ^(.*)\+pve[0-9]+(.*)$ ]]; do a=${BASH_REMATCH[1]}${BASH_REMATCH[2]}; done
+    fi
+    SIDE_ARGS+=("$a")
+    prev=$a
+  done
+}
+
 write_wrapper() {
   local out="${1:-$WRAPPER_PATH}"
   say "writing ${out}"
@@ -272,6 +294,13 @@ real=$(printf '%q' "$VENDOR_PATH")
 side=$(printf '%q' "$SIDE_BIN")
 list=$(printf '%q' "$LIST_FILE")
 log=$(printf '%q' "$LOG_FILE")
+# argv[0] seen by the QEMU process. qemu-server decides whether a pid is "its"
+# VM by matching argv[0] against kvm\$ or (^|/)qemu-..., and QEMU itself only
+# defaults to KVM acceleration when argv[0] looks like kvm. exec -a keeps
+# both working although the real binary lives at a different path.
+argv0=$(printf '%q' "$WRAPPER_PATH")
+
+$(declare -f qad_side_args)
 
 id=""
 for a in "\$@"; do
@@ -284,58 +313,86 @@ for a in "\$@"; do
 done
 
 if [[ -n \$id ]] && [[ -f \$list ]] && grep -qx "\$id" "\$list"; then
-  args=()
-  prev=""
-  skip=0
-  for a in "\$@"; do
-    if (( skip )); then skip=0; prev=\$a; continue; fi
-    # Vendor-only dummy option: "-id <vmid>". Vanilla QEMU has no -id.
-    if [[ \$a == -id ]]; then skip=1; prev=\$a; continue; fi
-    # pc-q35-10.1+pve1 -> pc-q35-10.1, only inside the -machine argument.
-    if [[ \$prev == -machine || \$prev == -M ]]; then
-      while [[ \$a =~ ^(.*)\+pve[0-9]+(.*)\$ ]]; do a=\${BASH_REMATCH[1]}\${BASH_REMATCH[2]}; done
-    fi
-    args+=("\$a")
-    prev=\$a
-  done
+  qad_side_args "\$@"
   if [[ -w \$log || ! -e \$log ]]; then
-    printf '%s vmid=%s exec %s\\n' "\$(date -Is)" "\$id" "\$side" >> "\$log" || true
+    printf '%s vmid=%s exec %s dropped=%s\\n' "\$(date -Is)" "\$id" "\$side" "\${SIDE_DROPPED[*]:-}" >> "\$log" || true
   fi
-  exec "\$side" "\${args[@]}"
+  exec -a "\$argv0" "\$side" "\${SIDE_ARGS[@]}"
 fi
 
-exec "\$real" "\$@"
+exec -a "\$argv0" "\$real" "\$@"
 EOF
   chmod 755 "$out"
 }
 
+# True (rc 0) if some process holds an fcntl lock on $1. dpkg uses fcntl
+# (POSIX) locks, so flock(1) cannot see them; /proc/locks lists them by
+# device:inode.
+dpkg_lock_held() {
+  local f="$1" ino
+  [[ -e $f ]] || return 1
+  ino=$(stat -c %i "$f") || return 1
+  [[ -r /proc/locks ]] || return 1
+  awk -v ino="$ino" '{ n = split($6, a, ":"); if (a[n] == ino) found = 1 } END { exit !found }' /proc/locks
+}
+
+preflight_divert_remove() {
+  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || die "${VENDOR_PATH} is missing; cannot restore ${WRAPPER_PATH} (is pve-qemu-kvm installed?)"
+  if dpkg_lock_held "${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"; then
+    die "another package manager holds ${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}; wait for it to finish and retry"
+  fi
+}
+
+# Pre-flight for anything that rewrites the divert. Cheap, read-only.
+preflight_divert() {
+  [[ -e $WRAPPER_PATH ]] || die "${WRAPPER_PATH} does not exist; refusing to divert a missing file (dpkg-divert --rename would silently do nothing). Reinstall pve-qemu-kvm first."
+  if dpkg_lock_held "${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"; then
+    die "another package manager holds ${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}; wait for it to finish and retry"
+  fi
+}
+
 install_wrapper() {
   [[ -x $SIDE_BIN ]] || die "side binary missing; build first"
+  preflight_divert
   install -d "$(dirname "$LIST_FILE")"
   [[ -f $LIST_FILE ]] || : > "$LIST_FILE"
 
   # Stage and syntax-check the wrapper BEFORE touching /usr/bin/kvm, so a
   # write failure cannot leave the host without a kvm binary. The final
-  # mv is an atomic rename in the same directory.
+  # mv is an atomic rename in the same directory. Cleanup is explicit (not a
+  # RETURN trap: that trap also fires in the caller and aborts under set -u).
   local staged="${WRAPPER_PATH}.qemu-ad-new"
-  trap 'rm -f "$staged"' RETURN
-  write_wrapper "$staged"
-  bash -n "$staged" || die "generated wrapper failed bash -n; nothing changed"
+  if ! write_wrapper "$staged"; then
+    rm -f "$staged"; die "could not write the wrapper; nothing changed"
+  fi
+  if ! bash -n "$staged"; then
+    rm -f "$staged"; die "generated wrapper failed bash -n; nothing changed"
+  fi
 
   # dpkg-divert --local survives package upgrades: pve-qemu-kvm's new
   # /usr/bin/kvm lands on $VENDOR_PATH instead of replacing the wrapper.
-  # --rename moves the currently installed file (binary or symlink) aside.
+  # The vendor file is COPIED to $VENDOR_PATH first, the divert is recorded
+  # without a rename, and the wrapper then replaces $WRAPPER_PATH with one
+  # atomic mv, so /usr/bin/kvm exists at every instant.
   if ! dpkg-divert --list "$WRAPPER_PATH" | grep -q "$VENDOR_PATH"; then
+    if [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]]; then
+      rm -f "$staged"; die "${VENDOR_PATH} already exists; not overwriting it"
+    fi
     say "diverting ${WRAPPER_PATH} -> ${VENDOR_PATH}"
-    dpkg-divert --local --rename --divert "$VENDOR_PATH" "$WRAPPER_PATH"
+    if ! cp -aP "$WRAPPER_PATH" "$VENDOR_PATH"; then
+      rm -f "$staged" "$VENDOR_PATH"; die "could not copy ${WRAPPER_PATH} to ${VENDOR_PATH}; nothing changed"
+    fi
+    if ! dpkg-divert --local --no-rename --divert "$VENDOR_PATH" "$WRAPPER_PATH"; then
+      rm -f "$staged" "$VENDOR_PATH"; die "dpkg-divert failed; nothing changed"
+    fi
   else
     say "divert already in place"
   fi
-  [[ -e $VENDOR_PATH ]] || die "divert claimed success but ${VENDOR_PATH} is missing"
+  [[ -e $VENDOR_PATH || -L $VENDOR_PATH ]] || { rm -f "$staged"; die "divert is recorded but ${VENDOR_PATH} is missing"; }
   if ! mv -f "$staged" "$WRAPPER_PATH"; then
-    # The divert already moved the vendor binary aside. Undo it so the
-    # host is not left without a kvm binary.
-    dpkg-divert --local --rename --remove "$WRAPPER_PATH" || true
+    # /usr/bin/kvm is still the vendor binary here. Undo the divert and the copy.
+    dpkg-divert --local --no-rename --remove "$WRAPPER_PATH" && rm -f "$VENDOR_PATH" || true
+    rm -f "$staged"
     die "could not install wrapper; divert rolled back"
   fi
   say "wrapper installed. VMIDs in ${LIST_FILE} use ${SIDE_BIN}"
@@ -376,16 +433,28 @@ del_vm() {
 
 showcmd() {
   local id="${1:-}"
-  [[ $id =~ ^[0-9]+$ ]] || die "showcmd needs a numeric VMID"
+  [[ $id =~ ^[1-9][0-9]*$ ]] || die "showcmd needs a numeric VMID (no leading zeros)"
   command -v qm >/dev/null 2>&1 || die "qm not on PATH"
   say "qm showcmd ${id} (vendor view)"
   qm showcmd "$id" --pretty || true
-  say "side-binary view ( +pveN stripped ); not executed"
-  # Reconstruct the rewrite the wrapper would do, without exec.
-  local line
-  while IFS= read -r line; do
-    printf '%s\n' "$line" | sed -E 's/\+pve[0-9]+//g'
-  done < <(qm showcmd "$id")
+  # Run the very function the generated wrapper uses, so this view cannot
+  # drift from what is exec'd.
+  local -a vendor=()
+  mapfile -d '' -t vendor < <(qm showcmd "$id" --pretty 2>/dev/null | python3 -c '
+import shlex,sys
+t=sys.stdin.read().replace("\\\n"," ")
+sys.stdout.write("\0".join(shlex.split(t)))' 2>/dev/null) || true
+  if [[ ${#vendor[@]} -gt 1 ]]; then
+    qad_side_args "${vendor[@]:1}"
+    if grep -qx "$id" "$LIST_FILE" 2>/dev/null; then
+      say "side-binary view: VMID ${id} IS listed, so this is what gets exec'd (${#SIDE_DROPPED[@]} option(s) dropped: ${SIDE_DROPPED[*]:-none}); not executed"
+    else
+      say "VMID ${id} is NOT listed: it runs on the vendor binary with the argv above unchanged. Side view below is hypothetical (dropped: ${SIDE_DROPPED[*]:-none})"
+    fi
+    printf '%q ' "$SIDE_BIN" "${SIDE_ARGS[@]}"; echo
+  else
+    echo "warning: could not parse qm showcmd output (python3 needed)" >&2
+  fi
 }
 
 status() {
@@ -431,18 +500,26 @@ uninstall() {
       /opt/?*|/usr/local/?*|/srv/?*) ;;
       *) die "refusing to purge PREFIX=${PREFIX} (must be under /opt, /usr/local or /srv)" ;;
     esac
+    # LIST_FILE is env-overridable and also gets rm -rf'd: it must be a file
+    # path under /etc/qemu-ad, /opt, /srv, /var/lib/qemu-ad or /usr/local.
+    case "$LIST_FILE" in
+      *..*|*//*|*/) die "refusing to purge LIST_FILE=${LIST_FILE} (non-canonical path)" ;;
+      /etc/qemu-ad/?*|/opt/?*|/srv/?*|/var/lib/qemu-ad/?*|/usr/local/?*) ;;
+      *) die "refusing to purge LIST_FILE=${LIST_FILE} (must be a file under /etc/qemu-ad, /var/lib/qemu-ad, /opt, /srv or /usr/local)" ;;
+    esac
   fi
   if dpkg-divert --list "$WRAPPER_PATH" | grep -q "$VENDOR_PATH"; then
     say "removing divert and restoring ${WRAPPER_PATH}"
-    # Move the wrapper aside instead of deleting it, so a failed
-    # dpkg-divert --remove cannot leave the host with no /usr/bin/kvm.
-    local aside="${WRAPPER_PATH}.qemu-ad-removed"
-    [[ -e $WRAPPER_PATH ]] && mv -f "$WRAPPER_PATH" "$aside"
-    if dpkg-divert --local --rename --remove "$WRAPPER_PATH"; then
-      rm -f "$aside"
-    else
-      [[ -e $aside ]] && mv -f "$aside" "$WRAPPER_PATH"
+    preflight_divert_remove
+    # Drop the divert record first (no file moves). If that fails nothing has
+    # changed. Then one atomic mv puts the vendor file back over the wrapper,
+    # so /usr/bin/kvm exists at every instant.
+    if ! dpkg-divert --local --no-rename --remove "$WRAPPER_PATH"; then
       die "dpkg-divert --remove failed; wrapper restored, nothing changed"
+    fi
+    if ! mv -f "$VENDOR_PATH" "$WRAPPER_PATH"; then
+      dpkg-divert --local --no-rename --divert "$VENDOR_PATH" "$WRAPPER_PATH" || true
+      die "could not restore ${VENDOR_PATH} to ${WRAPPER_PATH}; divert re-created, wrapper still active"
     fi
   else
     say "no divert to remove"

@@ -39,7 +39,7 @@ qm start 200
 
 `install` is safe to re-run. It installs build dependencies, shallow-clones the patch repository into `/opt/src/qemu-anti-detection`, downloads the matching QEMU tarball, applies `qemu-10.2.2.patch`, and builds with `--prefix=/opt/qemu-ad`. A stamp file stops a second run from reapplying the patch. Set `FORCE_REBUILD=1` to build again.
 
-`hidden=1` is the stock Proxmox CPU flag. It clears the hypervisor bit. SMBIOS manufacturer and product strings still have to be passed in the guest's `args:` line. PCI passthrough stays a normal `hostpci` line. Do not assign that same PCI address to another guest.
+`hidden=1` is the stock Proxmox CPU flag. Proxmox turns it into `kvm=off` on the `-cpu` line, which hides the KVM signature leaf. It does not by itself clear the CPUID hypervisor bit. SMBIOS manufacturer and product strings still have to be passed in the guest's `args:` line. PCI passthrough stays a normal `hostpci` line. Do not assign that same PCI address to another guest.
 
 ## Commands
 
@@ -53,7 +53,25 @@ qm start 200
 | `uninstall` | Restore `/usr/bin/kvm`, leave `/opt/qemu-ad` |
 | `uninstall --purge` | Also remove `/opt/qemu-ad` and the VMID list |
 
-Overrides: `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD=1`. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD` (set to `1`), `PATCH_REPO`, `TARBALL_URL`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`, `QEMU_SHA256`, `PATCH_SHA256`. `LIST_FILE` and `PREFIX` are also what `uninstall --purge` deletes, so both are checked against an allow-list first. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+
+`install` checks the QEMU tarball and the patch file against pinned SHA-256 values for 10.2.2 and stops on a mismatch. For another `QEMU_VER` there is no built-in pin: the script warns and continues, or you can export `QEMU_SHA256` and `PATCH_SHA256` to enforce your own. `status` and a repeated `install` warn if the built side binary does not report `QEMU_VER`; set `FORCE_REBUILD=1` to rebuild.
+
+## The VMID list file
+
+`/etc/qemu-ad/vms` holds **one bare VMID per line**: digits only, no leading zeros, nothing else on the line. Use `add-vm` and `del-vm` rather than editing by hand. The wrapper matches whole lines exactly, so these silently fall back to the vendor binary (the guest still starts, just not on the side build): a trailing or leading space, a trailing carriage return (CRLF line endings, from a file saved on Windows), and any line with a comment after the number. A line that starts with `#` is simply never matched. A missing or unreadable list also means everybody runs on the vendor binary.
+
+## How the wrapper starts QEMU
+
+The wrapper runs QEMU with `exec -a /usr/bin/kvm`, so the process reports `/usr/bin/kvm` as its program name even though the binary lives elsewhere. This matters: qemu-server only recognises a running VM when argv[0] ends in `kvm` or looks like `qemu-...`, and QEMU only enables KVM by default when it was started under a `kvm` name. Without it `qm status`, `qm stop` and friends do not see the guest, and a guest asking for `-cpu host` fails with "CPU model 'host' requires KVM".
+
+On the side-binary path the wrapper removes options that vanilla QEMU does not understand and records each one in `/var/log/qemu-ad-wrapper.log` (`dropped=...`). Current list: `-id <vmid>` (a Proxmox-only dummy option). `+pveN` is also stripped, but only inside the value of `-machine` / `-M`. `./qemu-ad-pve.sh showcmd <vmid>` runs the same code, so what it prints is what would be exec'd.
+
+## Do not `apt remove pve-qemu-kvm` while diverted
+
+With the divert active, `pve-qemu-kvm` owns `/usr/bin/kvm.pve`, and the wrapper at `/usr/bin/kvm` is not part of the package. Removing the package deletes `kvm.pve` but leaves the wrapper behind. Every guest that is not in `/etc/qemu-ad/vms` then fails to start, because the wrapper has no vendor binary to hand off to. Upgrades and reinstalls of `pve-qemu-kvm` are fine.
+
+To remove the package, run `./qemu-ad-pve.sh uninstall` first, then remove it. To bring the setup back after a reinstall, run `./qemu-ad-pve.sh install` again (the build is reused).
 
 ## Upstream
 

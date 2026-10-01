@@ -53,7 +53,7 @@ qm start 200
 | `uninstall` | Restore `/usr/bin/kvm`, leave `/opt/qemu-ad` |
 | `uninstall --purge` | Also remove `/opt/qemu-ad` and the VMID list |
 
-Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD` (set to `1`), `PATCH_REPO`, `TARBALL_URL`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`, `QEMU_SHA256`, `PATCH_SHA256`, `DPKG_LOCK` (the dpkg lock file that `install`/`uninstall` check before touching the divert; default `/var/lib/dpkg/lock-frontend`). `./qemu-ad-pve.sh help` lists them all. `LIST_FILE` and `PREFIX` are also what `uninstall --purge` deletes, so both are checked against an allow-list first: `PREFIX` must be a directory below `/opt`, `/srv` or `/usr/local` (not one of the standard `/usr/local` subdirectories such as `bin` or `share`), and `LIST_FILE` must be a file under `/etc/qemu-ad` or `/var/lib/qemu-ad` (removed with `rm -f`; a directory is refused). Non-canonical spellings (`..`, `//`, a trailing `/`, a `.` component such as `/./` or a trailing `/.`) are rejected for both. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD` (set to `1`), `PATCH_REPO`, `TARBALL_URL`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`, `QEMU_SHA256`, `PATCH_SHA256`, `DPKG_LOCK` (the dpkg lock file that `install`/`uninstall` check before touching the divert; default `/var/lib/dpkg/lock-frontend`). `./qemu-ad-pve.sh help` lists them all. `LIST_FILE` and `PREFIX` are also what `uninstall --purge` deletes, so both are checked against an allow-list first: `PREFIX` must be a directory below `/opt`, `/srv` or `/usr/local` (not one of the standard `/usr/local` subdirectories such as `bin` or `share`), and `LIST_FILE` must be a file under `/etc/qemu-ad` or `/var/lib/qemu-ad` (removed with `rm -f`; a directory is refused). If `--purge` refuses your `LIST_FILE`, nothing has been changed: run plain `uninstall` and delete the file by hand. Non-canonical spellings (`..`, `//`, a trailing `/`, a `.` component such as `/./` or a trailing `/.`) are rejected for both. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
 
 `install` checks the QEMU tarball and the patch file against pinned SHA-256 values for 10.2.2 and stops on a mismatch. For another `QEMU_VER` there is no built-in pin: the script warns and continues, or you can export `QEMU_SHA256` and `PATCH_SHA256` to enforce your own. `status` and a repeated `install` warn if the built side binary does not report `QEMU_VER`; set `FORCE_REBUILD=1` to rebuild.
 
@@ -66,6 +66,29 @@ Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBU
 The wrapper runs QEMU with `exec -a /usr/bin/kvm`, so the process reports `/usr/bin/kvm` as its program name even though the binary lives elsewhere. This matters: qemu-server only recognises a running VM when argv[0] ends in `kvm` or looks like `qemu-...`, and QEMU only enables KVM by default when it was started under a `kvm` name. Without it `qm status`, `qm stop` and friends do not see the guest, and a guest asking for `-cpu host` fails with "CPU model 'host' requires KVM".
 
 On the side-binary path the wrapper removes options that vanilla QEMU does not understand and records each one in `/var/log/qemu-ad-wrapper.log` (`dropped=...`). Current list: `-id <vmid>` (a Proxmox-only dummy option). `+pveN` is also stripped, but only inside the value of `-machine` / `-M`. `./qemu-ad-pve.sh showcmd <vmid>` runs the same code, so what it prints is what would be exec'd.
+
+## Vendor vs side version skew
+
+`qm` builds the command line for the vendor `pve-qemu-kvm` (11.0.x at the time of writing), but a listed guest runs on the side QEMU (10.2.2). The wrapper only rewrites what it has to. Anything else that the newer vendor build accepts and the older side build does not is passed through and fails when QEMU starts, usually with a plain QEMU error. Unlisted guests are never affected.
+
+| Option | Cause | Fix |
+| --- | --- | --- |
+| `-id <vmid>` | Vendor-only dummy option (a `pve-qemu` patch) | Handled: the wrapper drops it on the side path |
+| `+pveN` in `-machine` / `-M` | Proxmox machine-type revision | Handled: stripped inside the `-machine` / `-M` value only |
+| `-iscsi initiator-name=...` | Needs libiscsi in the side build | Handled: the side build uses `--enable-libiscsi` |
+| argv[0] | qemu-server recognises its VM by argv[0] ending in `kvm` | Handled: the wrapper uses `exec -a /usr/bin/kvm` |
+| `-vnc unix:...,password=on` fails with `Cipher backend does not support DES algorithm` | A side build without a crypto backend has no DES, so any guest with a VGA (the `qm create` default) fails | Fixed: the build uses `--enable-gcrypt --disable-gnutls` (`libgcrypt20-dev`). `install` rebuilds an existing side build that was made without it (see below) |
+| `-spice`, `-device qxl*` (`qm set --vga qxl`) | Vendor-only: `-spice: invalid option` on 10.2.2; SPICE needs libspice, which the side build lacks | Use `vga: std` (or `serial0`). `showcmd` prints a `WARNING` |
+| machine `pc-q35-11.0`, `pc-i440fx-11.0` | The side tree only knows machine types up to 10.2: `unsupported machine type` | Pin the guest to `pc-q35-10.1` or `10.2`. An unversioned `q35` resolves to the side's newest and works. `showcmd` prints a `WARNING` |
+| `rbd:` and `pbs:` drives, and the `alloc-track`, `backup-dump-drive`, `zeroinit`, `http(s)`, `ftp(s)` block drivers | Vendor-only block drivers (`pve-qemu` patches; rbd needs librbd) | Keep listed guests on local/LVM/ZFS/file/iSCSI storage. `showcmd` prints a `WARNING` for `rbd:`/`pbs:` |
+| CPU models newer than 10.2 (for example `SapphireRapids-v5`, `GraniteRapids`, `avx10*`), `usb-host`, `usb-redir` | Newer or vendor-enabled in 11.0.x | Use `host` or an older model. USB passthrough needs a side build with libusb |
+| `-loadstate` (resume from a RAM snapshot) | Vendor-only option | Not available on listed guests. Use snapshots without RAM. `showcmd` prints a `WARNING` |
+
+`./qemu-ad-pve.sh showcmd <vmid>` prints a `WARNING` line for a **listed** guest whose command line has `-spice`, a `qxl` device, a `pc-q35-N.M` / `pc-i440fx-N.M` machine newer than the side binary (its own `--version` is used), `-loadstate`, or an `rbd:` / `pbs:` drive path. It is a simple string check on the `qm showcmd` output, not a guarantee that everything else will start.
+
+### Crypto backend and rebuilding an older install
+
+Builds made before this check have no crypto backend, so a guest with a VGA/VNC console fails to start. `install` now rebuilds the side binary when it is missing the backend: it compares the configure flags recorded in `/opt/qemu-ad/.qemu-ad-configure-flags` with the current ones, and for a build that predates the stamp it checks with `ldd` that `libgcrypt` is linked. `status` prints a `WARNING` for the same condition. The rebuild takes a minute or two on 8 vCPUs; `FORCE_REBUILD=1 ./qemu-ad-pve.sh install` forces one.
 
 ## Do not `apt remove pve-qemu-kvm` while diverted
 

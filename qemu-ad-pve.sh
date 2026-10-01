@@ -137,7 +137,8 @@ install_deps() {
     git wget ca-certificates build-essential ninja-build pkg-config \
     python3 python3-venv meson flex bison \
     libglib2.0-dev libpixman-1-dev zlib1g-dev \
-    libaio-dev liburing-dev libiscsi-dev
+    libaio-dev liburing-dev libiscsi-dev \
+    libgcrypt20-dev
 }
 
 # verify_sha256 <file> <expected-or-empty> <label> <knob-name>
@@ -230,11 +231,54 @@ warn_version_skew() {
   fi
 }
 
+# configure flags of the side build. They are recorded in the build stamp after a
+# successful build, so a later `install` can tell when an existing build was
+# made with different flags. The crypto backend is not optional: without it
+# QEMU has no DES, and `-vnc ...,password=on` (every guest with a VGA, which
+# includes the qm create default) fails with "Cipher backend does not support
+# DES algorithm". gcrypt is explicit, because configure only auto-detects it
+# when the dev package happens to be installed.
+QAD_CONFIGURE_FLAGS=(
+  --target-list=x86_64-softmmu
+  --enable-kvm
+  --enable-linux-aio
+  --enable-linux-io-uring
+  --enable-libiscsi
+  --enable-gcrypt
+  --disable-gnutls
+  --disable-docs
+  --disable-werror
+)
+# Resolved at call time (PREFIX can be set after this file is read).
+build_stamp() { printf '%s' "${PREFIX}/.qemu-ad-configure-flags"; }
+
+# side_rebuild_reason: print why the installed side binary should be rebuilt;
+# print nothing when it is fine. With a build stamp the recorded flags are
+# compared with the current ones. A build from before the stamp existed has
+# none, so fall back to asking ldd whether the (dynamic) binary links libgcrypt.
+side_rebuild_reason() {
+  [[ -x $SIDE_BIN ]] || return 0
+  local stamp
+  stamp=$(build_stamp)
+  if [[ -f $stamp ]]; then
+    if [[ $(cat "$stamp") != "${QAD_CONFIGURE_FLAGS[*]}" ]]; then
+      printf 'it was built with different configure flags than this script uses (see %s)' "$stamp"
+    fi
+  elif ldd "$SIDE_BIN" 2>/dev/null | grep -q '=>' && ! ldd "$SIDE_BIN" 2>/dev/null | grep -q 'libgcrypt'; then
+    printf 'it does not link libgcrypt, so it has no crypto backend and guests with VGA/VNC cannot start ("Cipher backend does not support DES algorithm")'
+  fi
+}
+
 build_qemu() {
+  local why=""
   if [[ -x $SIDE_BIN && ${FORCE_REBUILD:-0} -ne 1 ]]; then
-    say "side binary already installed at ${SIDE_BIN} (set FORCE_REBUILD=1 to redo)"
-    warn_version_skew
-    return 0
+    why=$(side_rebuild_reason)
+    if [[ -z $why ]]; then
+      say "side binary already installed at ${SIDE_BIN} (set FORCE_REBUILD=1 to redo)"
+      warn_version_skew
+      return 0
+    fi
+    say "side binary at ${SIDE_BIN}: ${why}; rebuilding with gcrypt"
   fi
   say "configuring QEMU ${QEMU_VER} with prefix ${PREFIX}"
   # --prefix is the whole point. A default configure installs into /usr/local
@@ -242,19 +286,12 @@ build_qemu() {
   # path, but anything else that searches PATH would pick up the side build.
   (
     cd "$SRC_DIR"
-    ./configure \
-      --prefix="$PREFIX" \
-      --target-list=x86_64-softmmu \
-      --enable-kvm \
-      --enable-linux-aio \
-      --enable-linux-io-uring \
-      --enable-libiscsi \
-      --disable-docs \
-      --disable-werror
+    ./configure --prefix="$PREFIX" "${QAD_CONFIGURE_FLAGS[@]}"
     make -j"$(nproc)"
     make install
   )
   [[ -x $SIDE_BIN ]] || die "build finished but ${SIDE_BIN} is missing"
+  printf '%s\n' "${QAD_CONFIGURE_FLAGS[*]}" > "$(build_stamp)"
   say "installed $($SIDE_BIN --version | head -1)"
 }
 
@@ -303,9 +340,13 @@ qad_side_args() {
 # CRLF line endings. $1 must be digits only (callers validate).
 qad_list_pat() { printf '[[:space:]]*%s[[:space:]]*' "$1"; }
 # qad_list_has <vmid> <list-file>: rc 0 if listed; missing/unreadable -> rc 1, silent.
+# The pattern is built with printf -v (same format as qad_list_pat; keep them in
+# sync) so each start does not fork a subshell for it.
 qad_list_has() {
   [[ -f $2 ]] || return 1
-  grep -qxE -- "$(qad_list_pat "$1")" "$2" 2>/dev/null
+  local p
+  printf -v p '[[:space:]]*%s[[:space:]]*' "$1"
+  grep -qxE -- "$p" "$2" 2>/dev/null
 }
 
 write_wrapper() {
@@ -467,6 +508,41 @@ del_vm() {
   say "VMID ${id} removed; next start uses the vendor binary"
 }
 
+# qad_skew_warnings <vendor argv...>: print a WARNING line for each option the
+# vendor (pve-qemu 11.x) command line uses that the side QEMU lacks. Plain
+# string checks on the option and its value only. The side version comes from
+# its own --version (QEMU_VER if it is not built).
+qad_skew_warnings() {
+  local side_ver mj mn a prev="" mv
+  side_ver=$("$SIDE_BIN" --version 2>/dev/null | head -1) || true
+  [[ $side_ver =~ version\ ([0-9]+)\.([0-9]+) ]] || side_ver="version ${QEMU_VER}"
+  mj=0; mn=0
+  if [[ $side_ver =~ version\ ([0-9]+)\.([0-9]+) ]]; then mj=${BASH_REMATCH[1]}; mn=${BASH_REMATCH[2]}; fi
+  for a in "$@"; do
+    case "$a" in
+      -spice) echo "WARNING: -spice is a vendor-only option; the side QEMU ${mj}.${mn} rejects it (SPICE/qxl display unsupported). Use vga std or serial0." ;;
+      -loadstate) echo "WARNING: -loadstate (resume from a RAM snapshot) is not available on the side QEMU; the guest will fail to start." ;;
+    esac
+    case "$prev" in
+      -machine|-M)
+        if [[ $a =~ pc-(q35|i440fx)-([0-9]+)\.([0-9]+) ]]; then
+          mv=${BASH_REMATCH[0]}
+          if (( BASH_REMATCH[2] > mj || (BASH_REMATCH[2] == mj && BASH_REMATCH[3] > mn) )); then
+            echo "WARNING: machine ${mv} is newer than the side QEMU ${mj}.${mn} and will be rejected. Pin the guest to pc-${BASH_REMATCH[1]}-${mj}.${mn} or older."
+          fi
+        fi ;;
+      -drive|-blockdev)
+        case "$a" in
+          *file=rbd:*|rbd:*) echo "WARNING: rbd: drive path; the side QEMU has no rbd block driver (Ceph disks unsupported on listed guests)." ;;
+          *file=pbs:*|pbs:*) echo "WARNING: pbs: drive path; the side QEMU has no pbs block driver." ;;
+        esac ;;
+      -device)
+        [[ $a == qxl* ]] && echo "WARNING: -device ${a%%,*}: qxl needs SPICE support, which the side QEMU lacks." ;;
+    esac
+    prev=$a
+  done
+}
+
 showcmd() {
   local id="${1:-}"
   [[ $id =~ ^[1-9][0-9]*$ ]] || die "showcmd needs a numeric VMID (no leading zeros)"
@@ -488,6 +564,7 @@ sys.stdout.write("\0".join(shlex.split(t)))' 2>/dev/null) || true
       say "VMID ${id} is NOT listed: it runs on the vendor binary with the argv above unchanged. Side view below is hypothetical (dropped: ${SIDE_DROPPED[*]:-none})"
     fi
     printf '%q ' "$SIDE_BIN" "${SIDE_ARGS[@]}"; echo
+    if qad_list_has "$id" "$LIST_FILE"; then qad_skew_warnings "${vendor[@]:1}"; fi
   else
     echo "warning: could not parse qm showcmd output (python3 needed)" >&2
   fi
@@ -499,6 +576,11 @@ status() {
   if [[ -x $SIDE_BIN ]]; then
     echo "side ver:   $($SIDE_BIN --version | head -1)"
     warn_version_skew
+    local why
+    why=$(side_rebuild_reason)
+    if [[ -n $why ]]; then
+      echo "WARNING:    side binary: ${why}. Run '$0 install' to rebuild it (or FORCE_REBUILD=1 $0 install)."
+    fi
   else
     echo "side ver:   (not built)"
   fi
@@ -545,11 +627,14 @@ uninstall() {
     # LIST_FILE is a single file, removed with rm -f: it must be a canonical
     # path to a file inside /etc/qemu-ad or /var/lib/qemu-ad, never a directory.
     case "$LIST_FILE" in
-      ""|*..*|*//*|*/|*/./*|*/.) die "refusing to purge LIST_FILE=${LIST_FILE} (non-canonical path)" ;;
+      ""|*..*|*//*|*/|*/./*|*/.) die "refusing to purge LIST_FILE=${LIST_FILE} (non-canonical path)
+Nothing was changed. Run plain '$0 uninstall' (without --purge) and delete the list file by hand." ;;
       /etc/qemu-ad/?*|/var/lib/qemu-ad/?*) ;;
-      *) die "refusing to purge LIST_FILE=${LIST_FILE} (must be a file under /etc/qemu-ad or /var/lib/qemu-ad)" ;;
+      *) die "refusing to purge LIST_FILE=${LIST_FILE} (must be a file under /etc/qemu-ad or /var/lib/qemu-ad)
+Nothing was changed. Run plain '$0 uninstall' (without --purge) and delete the list file by hand." ;;
     esac
-    [[ ! -d $LIST_FILE ]] || die "refusing to purge LIST_FILE=${LIST_FILE} (is a directory)"
+    [[ ! -d $LIST_FILE ]] || die "refusing to purge LIST_FILE=${LIST_FILE} (is a directory)
+Nothing was changed. Run plain '$0 uninstall' (without --purge) and delete the list file by hand."
   fi
   if dpkg-divert --list "$WRAPPER_PATH" | grep -q "$VENDOR_PATH"; then
     say "removing divert and restoring ${WRAPPER_PATH}"

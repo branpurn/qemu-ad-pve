@@ -529,5 +529,111 @@ chk "C12c README no longer claims hidden=1 clears the hypervisor bit" '! grep -q
 chk "C12d README no longer lists CRLF / padded lines as a known limitation" '! grep -qi "silently fall back to the vendor binary" "$(dirname "$SCRIPT")/README.md" && grep -qi "CRLF" "$(dirname "$SCRIPT")/README.md"'
 chk "C12e README has the apt-remove recovery hint" 'grep -qi "reinstall" "$(dirname "$SCRIPT")/README.md" && grep -qi "pve-qemu-kvm" "$(dirname "$SCRIPT")/README.md" && grep -qi "was removed\|already removed\|already ran" "$(dirname "$SCRIPT")/README.md"'
 
+# ===========================================================================
+echo "== C15 PR5: crypto backend (BUG-A), version-skew warnings (BUG-B), list pattern fork (LOW 1), purge hint (LOW 2)"
+# --- BUG-A: gcrypt in deps and configure; existing builds without it get rebuilt
+cat > "$W/stub/apt-get" <<'S'
+#!/bin/bash
+echo "apt-get $*" >> "${STATE:-/tmp}/apt.log"; exit 0
+S
+cat > "$W/stub/ldd" <<'S'
+#!/bin/bash
+# LDD_MODE=gcrypt|nocrypt
+echo "$*" >> "${STATE:-/tmp}/ldd.log"
+echo "	libglib-2.0.so.0 => /lib/libglib-2.0.so.0 (0x1)"
+[[ ${LDD_MODE:-nocrypt} == gcrypt ]] && echo "	libgcrypt.so.20 => /lib/libgcrypt.so.20 (0x2)"
+exit 0
+S
+cat > "$W/stub/make" <<'S'
+#!/bin/bash
+echo "make $*" >> "${STATE:-/tmp}/make.log"
+if [[ $1 == install ]]; then
+  p=$(cat "$STATE/cfg.prefix"); mkdir -p "$p/bin"
+  printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$p/bin/qemu-system-x86_64"; chmod +x "$p/bin/qemu-system-x86_64"
+fi
+exit 0
+S
+chmod +x "$W/stub/apt-get" "$W/stub/ldd" "$W/stub/make"
+fresh; : > "$T/apt.log"; L 'install_deps' >/dev/null 2>&1
+chk "C15a apt build deps include libgcrypt20-dev" 'grep -q "libgcrypt20-dev" "$T/apt.log"'
+# BQ <env...>: run build_qemu against a fake source tree + prefix in $T. cfg.args = what configure got.
+mkbq() { fresh; mkdir -p "$T/src" "$T/prefix/bin"
+  cat > "$T/src/configure" <<'S'
+#!/bin/bash
+echo "$*" > "$STATE/cfg.args"; for a in "$@"; do [[ $a == --prefix=* ]] && echo "${a#--prefix=}" > "$STATE/cfg.prefix"; done; exit 0
+S
+  chmod +x "$T/src/configure"; : > "$T/make.log"; }
+BQ() { env "$@" PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; PREFIX='$T/prefix' SIDE_BIN='$T/prefix/bin/qemu-system-x86_64' SRC_DIR='$T/src'; build_qemu" >"$T/bq.out" 2>&1; }
+mkbq; BQ STATE="$T"; rc=$?
+chk "C15b no side binary: configure gets --enable-gcrypt and --disable-gnutls" '[[ $rc -eq 0 ]] && grep -q -- "--enable-gcrypt" "$T/cfg.args" && grep -q -- "--disable-gnutls" "$T/cfg.args"'
+chk "C15c a successful build leaves a build stamp under PREFIX recording the gcrypt flag" 'grep -rq -- "--enable-gcrypt" "$T/prefix" --include=".*" 2>/dev/null || grep -rq -- "--enable-gcrypt" "$T/prefix"'
+# existing side binary, no stamp (installed by an older version of this script)
+mkbq; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+BQ STATE="$T" LDD_MODE=nocrypt; rc=$?
+chk "C15d existing build without libgcrypt (ldd) and no stamp: rebuilt automatically with gcrypt" '[[ $rc -eq 0 ]] && grep -q -- "--enable-gcrypt" "$T/cfg.args" && grep -q "^make install" "$T/make.log"'
+chk "C15d2 the rebuild tells the user why" 'grep -qi "gcrypt" "$T/bq.out" && grep -qi "rebuil" "$T/bq.out"'
+mkbq; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+BQ STATE="$T" LDD_MODE=gcrypt; rc=$?
+chk "C15e existing build already linked to libgcrypt, no stamp: NOT rebuilt" '[[ $rc -eq 0 && ! -e $T/cfg.args && ! -s $T/make.log ]]'
+# second run after a build is a no-op (stamp matches)
+mkbq; BQ STATE="$T" LDD_MODE=nocrypt; rm -f "$T/cfg.args"; : > "$T/make.log"; BQ STATE="$T" LDD_MODE=nocrypt; rc=$?
+chk "C15f install again after a stamped build: no rebuild (idempotent)" '[[ $rc -eq 0 && ! -e $T/cfg.args && ! -s $T/make.log ]]'
+# stamp present but with different flags -> rebuild
+mkbq; BQ STATE="$T" LDD_MODE=gcrypt; stamp=$(grep -rl -- "--enable-gcrypt" "$T/prefix" | head -1); rm -f "$T/cfg.args"
+[[ -n $stamp ]] && echo "--enable-libiscsi" > "$stamp"; BQ STATE="$T" LDD_MODE=gcrypt; rc=$?
+chk "C15g stamp with different configure flags: rebuilt" '[[ $rc -eq 0 && -e $T/cfg.args ]]'
+mkbq; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+BQ STATE="$T" LDD_MODE=gcrypt FORCE_REBUILD=1; rc=$?
+chk "C15h FORCE_REBUILD=1 still forces a rebuild" '[[ $rc -eq 0 && -e $T/cfg.args ]]'
+fresh; mkdir -p "$T/prefix/bin"; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+o=$(STATE="$T" LDD_MODE=nocrypt L "PREFIX='$T/prefix' SIDE_BIN='$T/prefix/bin/qemu-system-x86_64'; status" 2>&1)
+chk "C15i status warns when the side binary has no crypto backend (VGA/VNC guests will not start)" '[[ $o == *WARNING* && $o == *gcrypt* ]]'
+o=$(STATE="$T" LDD_MODE=gcrypt L "PREFIX='$T/prefix' SIDE_BIN='$T/prefix/bin/qemu-system-x86_64'; status" 2>&1)
+chk "C15j status: no crypto warning when libgcrypt is linked" '[[ $o != *"no crypto"* && $o != *"FORCE_REBUILD"* ]]'
+
+# --- BUG-B: showcmd warnings for listed guests
+sk() { # sk <vmid> <list-content> <qm-showcmd-body...>; prints showcmd output (stdout+stderr)
+  local id=$1 lst=$2; shift 2; fresh; printf '%b' "$lst" > "$T/vms"
+  { printf '#!/bin/bash\n[[ $1 == showcmd ]] || exit 0\ncat <<"EOQ"\n'; printf '%s\n' "$@"; printf 'EOQ\n'; } > "$W/stub/qm"; chmod +x "$W/stub/qm"
+  L "QEMU_VER=10.2.2; SIDE_BIN='$W/side102'; showcmd $id" 2>&1; }
+printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$W/side102"; chmod +x "$W/side102"
+base=('/usr/bin/kvm \' '  -id 200 \' '  -pidfile /var/run/qemu-server/200.pid \')
+o=$(sk 200 '200\n' "${base[@]}" '  -name vm' ); chk "C16a clean listed guest: no skew WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -spice tls-port=61000,addr=localhost' ); chk "C16b listed + -spice: WARNING mentioning spice" '[[ $o == *WARNING*[Ss]pice* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-11.0+pve0,accel=kvm' ); chk "C16c listed + pc-q35-11.0 (side 10.2.2): WARNING mentioning the machine" '[[ $o == *WARNING*pc-q35-11.0* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-i440fx-10.3,accel=kvm' ); chk "C16d listed + pc-i440fx-10.3 (newer minor): WARNING" '[[ $o == *WARNING*pc-i440fx-10.3* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-10.1+pve0,accel=kvm' ); chk "C16e listed + pc-q35-10.1 (older): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-10.2,accel=kvm' ); chk "C16e2 listed + pc-q35-10.2 (same as side): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-9.2+pve1' ); chk "C16e3 listed + pc-q35-9.2 (older major): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -loadstate /dev/pve/vm-200-state-s1' ); chk "C16f listed + -loadstate: WARNING mentioning loadstate" '[[ $o == *WARNING*loadstate* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -drive file=rbd:pool/vm-200-disk-0:conf=/etc/ceph/ceph.conf,if=none,id=drive-scsi0' ); chk "C16g listed + rbd: drive: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -drive file=pbs:repo=x,if=none,id=d0' ); chk "C16h listed + pbs: drive: WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 201 '200\n' '/usr/bin/kvm \' '  -id 201 \' '  -pidfile /var/run/qemu-server/201.pid \' '  -spice x -loadstate y -machine pc-q35-11.0' ); chk "C16i UNLISTED guest with all skew options: no WARNING (it runs on the vendor binary)" '[[ $o != *WARNING* && $o == *"NOT listed"* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -name spice-lab \' '  -smbios type=1,product=pc-q35-11.0-x,serial=rbd:y' ); chk "C16j option values that merely contain the words are not flagged (-name spice-lab, smbios text)" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -spice a \' '  -loadstate b' ); chk "C16k several problems: one WARNING per problem" '[[ $(grep -c "^WARNING" <<<"$o") -ge 2 ]]'
+command rm -f "$W/stub/qm"
+
+# --- LOW 1: qad_list_has must not fork a subshell for the pattern
+fresh; printf '200\n' > "$T/vms"
+r=$(L "eval \"_orig_\$(declare -f qad_list_pat)\"; qad_list_pat() { echo \$BASHPID >> '$T/pids'; _orig_qad_list_pat \"\$@\"; }; : > '$T/pids'; me=\$BASHPID; qad_list_has 200 '$T/vms'; echo rc=\$? me=\$me; cat '$T/pids'" 2>&1)
+chk "C17a qad_list_has still matches (rc 0)" '[[ $r == *"rc=0"* ]]'
+chk "C17b qad_list_has builds the pattern in the current shell (no \$(...) subshell fork)" 'me=$(sed -n "s/.*me=//p" <<<"$r"); ! grep -v -x -- "$me" <<<"$(sed "1,/^rc=/d" <<<"$r")" | grep -q .'
+chk "C17c qad_list_has body has no command substitution" '! L "declare -f qad_list_has" | grep -q "[$](" '
+chk "C17d qad_list_has: unlisted / missing file still rc 1" '[[ $(L "qad_list_has 201 \"$T/vms\" && echo y || echo n") == n && $(L "qad_list_has 200 \"$T/none\" && echo y || echo n") == n ]]'
+
+# --- LOW 2: purge refusal of LIST_FILE tells how to proceed
+fresh; e=$(PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ :; }; PREFIX=/opt/qemu-ad LIST_FILE=/root/my-vms WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" 2>&1 >/dev/null); rc=$?
+chk "C18a purge with LIST_FILE outside the allow-list: refused" '[[ $rc -ne 0 && $e == *"refusing to purge LIST_FILE=/root/my-vms"* ]]'
+chk "C18b ...and the message says to run plain uninstall and delete the file by hand" '[[ $e == *"plain"* && $e == *uninstall* && $e == *"by hand"* ]]'
+e=$(PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ :; }; PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/../x WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" 2>&1 >/dev/null)
+chk "C18c non-canonical LIST_FILE refusal carries the same hint" '[[ $e == *"by hand"* ]]'
+
+# --- README
+R="$(dirname "$SCRIPT")/README.md"
+chk "C19a README has a 'Vendor vs side version skew' section" 'grep -q "^## Vendor vs side version skew" "$R"'
+chk "C19b skew table covers spice/qxl, pc-q35-11.0, rbd/pbs, CPU models, -loadstate, -id, +pveN, -iscsi, argv[0]" 'sec=$(sed -n "/^## Vendor vs side version skew/,/^## [^V]/p" "$R"); m=0; for k in "-spice" "qxl" "pc-q35-11.0" "rbd" "pbs" "-loadstate" "-id" "+pve" "-iscsi" "argv"; do grep -qF -- "$k" <<<"$sec" || { echo "missing $k"; m=1; }; done; grep -q "^| *Option" <<<"$sec" && [[ $m -eq 0 ]]'
+chk "C19c README mentions the crypto backend / libgcrypt and the automatic rebuild" 'grep -qi "libgcrypt" "$R" && grep -qi "rebuil" "$R"'
+chk "C19d README mentions showcmd WARNING lines" 'grep -q "WARNING" "$R"'
+
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

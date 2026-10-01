@@ -439,6 +439,10 @@ if [[ $HAVE_USERNS -eq 1 ]] && unshare -Urm bash -c 'mount -t tmpfs none /etc' 2
      PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/adir WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" >/dev/null 2>&1; echo $?)
   chk "C10 purge refuses a LIST_FILE that is an existing directory (/etc/qemu-ad/adir)" '[[ $r -ne 0 && ! -s $T/rm.log ]]'
   fresh
+  e=$(unshare -Urm env PATH="$W/stub:$PATH" bash -c "mount -t tmpfs none /etc && mkdir -p /etc/qemu-ad/adir && source '$W/lib.sh'; set -euo pipefail; rm(){ :; }
+     PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/adir WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" 2>&1 >/dev/null)
+  chk "C18d directory LIST_FILE refusal says it is a directory, nothing was changed, run plain uninstall and delete by hand" '[[ $e == *"is a directory"* && $e == *"Nothing was changed"* && $e == *"plain"* && $e == *"uninstall"* && $e == *"(without --purge)"* && $e == *"by hand"* ]]'
+  fresh
   r=$(unshare -Urm env PATH="$W/stub:$PATH" bash -c "mount -t tmpfs none /etc && mkdir -p /etc/qemu-ad && : > /etc/qemu-ad/vms && source '$W/lib.sh'; set -euo pipefail; rm(){ echo \"RM \$*\" >> '$T/rm.log'; }
      PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/vms WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" >/dev/null 2>&1; echo $?)
   chk "C10 purge of an existing regular LIST_FILE works (control for the directory case)" '[[ $r -eq 0 ]] && grep -qx "RM -f /etc/qemu-ad/vms" "$T/rm.log"'
@@ -541,7 +545,12 @@ cat > "$W/stub/ldd" <<'S'
 # LDD_MODE=gcrypt|nocrypt
 echo "$*" >> "${STATE:-/tmp}/ldd.log"
 echo "	libglib-2.0.so.0 => /lib/libglib-2.0.so.0 (0x1)"
-[[ ${LDD_MODE:-nocrypt} == gcrypt ]] && echo "	libgcrypt.so.20 => /lib/libgcrypt.so.20 (0x2)"
+[[ ${LDD_MODE:-nocrypt} == *gcrypt ]] && echo "	libgcrypt.so.20 => /lib/libgcrypt.so.20 (0x2)"
+# big* modes: lots of further output after the lines above, so a reader that stops at its
+# first match (grep -q) makes this stub die of SIGPIPE (rc 141) under pipefail.
+if [[ ${LDD_MODE:-} == big* ]]; then
+  for ((i=0; i<30000; i++)); do echo "	libpad$i.so.0 => /lib/libpad$i.so.0 (0x3)"; done
+fi
 exit 0
 S
 cat > "$W/stub/make" <<'S'
@@ -590,6 +599,21 @@ o=$(STATE="$T" LDD_MODE=nocrypt L "PREFIX='$T/prefix' SIDE_BIN='$T/prefix/bin/qe
 chk "C15i status warns when the side binary has no crypto backend (VGA/VNC guests will not start)" '[[ $o == *WARNING* && $o == *gcrypt* ]]'
 o=$(STATE="$T" LDD_MODE=gcrypt L "PREFIX='$T/prefix' SIDE_BIN='$T/prefix/bin/qemu-system-x86_64'; status" 2>&1)
 chk "C15j status: no crypto warning when libgcrypt is linked" '[[ $o != *"no crypto"* && $o != *"FORCE_REBUILD"* ]]'
+# ldd output far bigger than a pipe buffer (stub dies of SIGPIPE when the reader stops early): the verdict must not flip
+mkbq; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+BQ STATE="$T" LDD_MODE=biggcrypt; rc=$?
+chk "C15k big ldd output that links libgcrypt (SIGPIPE-prone), no stamp: NOT rebuilt" '[[ $rc -eq 0 && ! -e $T/cfg.args && ! -s $T/make.log ]]'
+mkbq; printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$T/prefix/bin/qemu-system-x86_64"; chmod +x "$T/prefix/bin/qemu-system-x86_64"
+BQ STATE="$T" LDD_MODE=big; rc=$?
+chk "C15l big ldd output without libgcrypt, no stamp: still rebuilt" '[[ $rc -eq 0 && -e $T/cfg.args ]]'
+chk "C15m side_rebuild_reason captures ldd into a variable (no ldd | grep pipeline)" '! grep -E "ldd[^|]*[|]([^|]|$)" "$SCRIPT" | grep -v "^[[:space:]]*#" | grep -q .'
+# hermetic configure flags + stamp
+mkbq; BQ STATE="$T"
+chk "C15n configure gets --disable-spice --disable-rbd --disable-curl --disable-libusb --disable-usb-redir (host dev libs must not change the binary)" 'm=0; for f in --disable-spice --disable-rbd --disable-curl --disable-libusb --disable-usb-redir; do grep -q -- "$f" "$T/cfg.args" || { echo "missing $f"; m=1; }; done; [[ $m -eq 0 ]]'
+chk "C15o the build stamp records the --disable-* flags too" 'st=$(cat "$T/prefix/.qemu-ad-configure-flags"); [[ $st == *--disable-spice*--disable-rbd* ]]'
+mkbq; BQ STATE="$T"; rm -f "$T/cfg.args"; printf -- "--target-list=x86_64-softmmu --enable-kvm --enable-linux-aio --enable-linux-io-uring --enable-libiscsi --enable-gcrypt --disable-gnutls --disable-docs --disable-werror\n" > "$T/prefix/.qemu-ad-configure-flags"
+BQ STATE="$T" LDD_MODE=gcrypt; rc=$?
+chk "C15p a PR #5 era stamp (without the new --disable-* flags) triggers a rebuild" '[[ $rc -eq 0 && -e $T/cfg.args ]]'
 
 # --- BUG-B: showcmd warnings for listed guests
 sk() { # sk <vmid> <list-content> <qm-showcmd-body...>; prints showcmd output (stdout+stderr)
@@ -611,13 +635,45 @@ o=$(sk 200 '200\n' "${base[@]}" '  -drive file=pbs:repo=x,if=none,id=d0' ); chk 
 o=$(sk 201 '200\n' '/usr/bin/kvm \' '  -id 201 \' '  -pidfile /var/run/qemu-server/201.pid \' '  -spice x -loadstate y -machine pc-q35-11.0' ); chk "C16i UNLISTED guest with all skew options: no WARNING (it runs on the vendor binary)" '[[ $o != *WARNING* && $o == *"NOT listed"* ]]'
 o=$(sk 200 '200\n' "${base[@]}" '  -name spice-lab \' '  -smbios type=1,product=pc-q35-11.0-x,serial=rbd:y' ); chk "C16j option values that merely contain the words are not flagged (-name spice-lab, smbios text)" '[[ $o != *WARNING* ]]'
 o=$(sk 200 '200\n' "${base[@]}" '  -spice a \' '  -loadstate b' ); chk "C16k several problems: one WARNING per problem" '[[ $(grep -c "^WARNING" <<<"$o") -ge 2 ]]'
+# QA PR5 follow-ups: -blockdev forms (machine >= 10.0), qxl, rbd false positives
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"rbd","pool":"p","image":"vm-200-disk-0","node-name":"n1"}'"'" ); chk "C16l -blockdev JSON \"driver\":\"rbd\": WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver": "pbs", "repository":"x"}'"'" ); chk "C16m -blockdev JSON \"driver\": \"pbs\" (space after the colon): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"node-name":"a","driver" : "alloc-track","backing":"b"}'"'" ); chk "C16n -blockdev JSON alloc-track (spaces around the colon): WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"zeroinit","file":"z"}'"'" ); chk "C16o -blockdev JSON zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=rbd,pool=p,image=i,node-name=n' ); chk "C16p -blockdev driver=rbd key=value form: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev node-name=n,driver=pbs,repository=x' ); chk "C16q -blockdev driver=pbs (not the first token): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=alloc-track,node-name=n' ); chk "C16r -blockdev driver=alloc-track: WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=zeroinit,node-name=n,file=f' ); chk "C16s -blockdev driver=zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n,file.driver=rbd,file.pool=p' ); chk "C16s2 nested file.driver=rbd: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -device qxl-vga,id=vga0,ram_size=67108864' ); chk "C16t listed + -device qxl-vga: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device qxl,id=video1' ); chk "C16u listed + qxl as a later -device: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device virtio-blk-pci,drive=qxl' ); chk "C16v no qxl device (id=qxl0 / drive=qxl are only names): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -drive file=/var/lib/vz/images/200/rbd.qcow2,if=none,id=drive-rbd \' '  -name rbd-driver=raw-vm,debug-threads=on' ); chk "C16w rbd false positive: image file / VM name containing 'rbd' and 'driver=raw': no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n1,file.driver=file,file.filename=/mnt/mydriver=rbd.raw,cache.direct=on' ); chk "C16x rbd false positive: 'driver=rbd' only inside another token (file.filename=/mnt/mydriver=rbd.raw): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"raw","file":{"driver":"file","filename":"/var/lib/vz/images/200/rbd.raw"},"node-name":"n1"}'"'" ); chk "C16y rbd false positive: harmless JSON -blockdev (drivers raw/file, path contains rbd): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=rbd,file=f \' '  -drive file=/dev/zvol/rpool/data/vm-200-disk-0,driver=raw,if=none,id=d0' ); chk "C16z rbd false positive: driver=raw, node-name=rbd: no WARNING" '[[ $o != *WARNING* ]]'
 command rm -f "$W/stub/qm"
 
 # --- LOW 1: qad_list_has must not fork a subshell for the pattern
 fresh; printf '200\n' > "$T/vms"
 r=$(L "eval \"_orig_\$(declare -f qad_list_pat)\"; qad_list_pat() { echo \$BASHPID >> '$T/pids'; _orig_qad_list_pat \"\$@\"; }; : > '$T/pids'; me=\$BASHPID; qad_list_has 200 '$T/vms'; echo rc=\$? me=\$me; cat '$T/pids'" 2>&1)
 chk "C17a qad_list_has still matches (rc 0)" '[[ $r == *"rc=0"* ]]'
-chk "C17b qad_list_has builds the pattern in the current shell (no \$(...) subshell fork)" 'me=$(sed -n "s/.*me=//p" <<<"$r"); ! grep -v -x -- "$me" <<<"$(sed "1,/^rc=/d" <<<"$r")" | grep -q .'
+# The function body as it is embedded in the generated wrapper (not just in the script).
+mkw; wbody=$(sed -n '/^qad_list_has *()/,/^}/p' "$T/kvm")
+# qlh_body_ok <body>: uses printf -v and has no command substitution ($( or backticks)
+# around the pattern, i.e. no subshell fork per VM start.
+qlh_body_ok() { [[ $1 == *"printf -v"* && $1 != *'$(qad_list_pat'* && $1 != *'$('* && $1 != *'`'* ]]; }
+chk "C17b qad_list_has in the generated wrapper has printf -v and no \$(qad_list_pat ...) substitution" '[[ -n $wbody ]] && qlh_body_ok "$wbody"'
+# Mutation checks: the same predicate must fail on mutated bodies.
+# shellcheck disable=SC2034 # used inside the eval'd chk expressions
+mut=${wbody//printf -v p /p=\$(qad_list_pat \"\$1\") :}
+chk "C17b2 mutation: printf -v replaced by a \$(qad_list_pat ...) substitution -> predicate fails" '[[ $mut != "$wbody" && $mut == *"\$(qad_list_pat"* ]] && ! qlh_body_ok "$mut"'
+# shellcheck disable=SC2034 # used inside the eval'd chk expressions
+mut=${wbody//printf -v p /p=\`qad_list_pat \"\$1\"\` :}
+chk "C17b3 mutation: backtick substitution -> predicate fails" '[[ $mut != "$wbody" ]] && ! qlh_body_ok "$mut"'
+# shellcheck disable=SC2034 # used inside the eval'd chk expressions
+mut=${wbody//printf -v p /true }
+chk "C17b4 mutation: printf -v removed -> predicate fails" '[[ $mut != "$wbody" ]] && ! qlh_body_ok "$mut"'
 chk "C17c qad_list_has body has no command substitution" '! L "declare -f qad_list_has" | grep -q "[$](" '
 chk "C17d qad_list_has: unlisted / missing file still rc 1" '[[ $(L "qad_list_has 201 \"$T/vms\" && echo y || echo n") == n && $(L "qad_list_has 200 \"$T/none\" && echo y || echo n") == n ]]'
 
@@ -633,6 +689,8 @@ R="$(dirname "$SCRIPT")/README.md"
 chk "C19a README has a 'Vendor vs side version skew' section" 'grep -q "^## Vendor vs side version skew" "$R"'
 chk "C19b skew table covers spice/qxl, pc-q35-11.0, rbd/pbs, CPU models, -loadstate, -id, +pveN, -iscsi, argv[0]" 'sec=$(sed -n "/^## Vendor vs side version skew/,/^## [^V]/p" "$R"); m=0; for k in "-spice" "qxl" "pc-q35-11.0" "rbd" "pbs" "-loadstate" "-id" "+pve" "-iscsi" "argv"; do grep -qF -- "$k" <<<"$sec" || { echo "missing $k"; m=1; }; done; grep -q "^| *Option" <<<"$sec" && [[ $m -eq 0 ]]'
 chk "C19c README mentions the crypto backend / libgcrypt and the automatic rebuild" 'grep -qi "libgcrypt" "$R" && grep -qi "rebuil" "$R"'
+chk "C19e README no longer says GraniteRapids/avx10 are missing from 10.2.2, and says only SapphireRapids-v5 is" 'sec=$(grep "^| CPU model" "$R"); [[ -n $sec && $sec == *SapphireRapids-v5* && $sec == *"exist in 10.2.2"* && $sec != *"newer than 10.2 (for example"* ]]'
+chk "C19f README says http(s)/ftp(s)/spice/rbd/usb are absent because of the build flags, not intrinsic" 'm=0; for k in --disable-spice --disable-rbd --disable-curl --disable-libusb; do grep -q -- "$k" "$R" || { echo "missing $k"; m=1; }; done; [[ $m -eq 0 ]] && ! grep -q "Vendor-only block drivers (.pve-qemu. patches; rbd needs librbd)" "$R"'
 chk "C19d README mentions showcmd WARNING lines" 'grep -q "WARNING" "$R"'
 
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"

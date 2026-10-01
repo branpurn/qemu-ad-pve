@@ -238,6 +238,11 @@ warn_version_skew() {
 # includes the qm create default) fails with "Cipher backend does not support
 # DES algorithm". gcrypt is explicit, because configure only auto-detects it
 # when the dev package happens to be installed.
+# The optional features whose dev libraries this script does not install
+# (spice, rbd, curl, libusb, usb-redir) are switched off explicitly. configure
+# would otherwise auto-detect them, so a build host that happens to have e.g.
+# libspice-server-dev or librbd-dev would produce a different binary. Any change
+# to this list changes the build stamp, so existing builds are rebuilt.
 QAD_CONFIGURE_FLAGS=(
   --target-list=x86_64-softmmu
   --enable-kvm
@@ -246,6 +251,11 @@ QAD_CONFIGURE_FLAGS=(
   --enable-libiscsi
   --enable-gcrypt
   --disable-gnutls
+  --disable-spice
+  --disable-rbd
+  --disable-curl
+  --disable-libusb
+  --disable-usb-redir
   --disable-docs
   --disable-werror
 )
@@ -264,8 +274,14 @@ side_rebuild_reason() {
     if [[ $(cat "$stamp") != "${QAD_CONFIGURE_FLAGS[*]}" ]]; then
       printf 'it was built with different configure flags than this script uses (see %s)' "$stamp"
     fi
-  elif ldd "$SIDE_BIN" 2>/dev/null | grep -q '=>' && ! ldd "$SIDE_BIN" 2>/dev/null | grep -q 'libgcrypt'; then
-    printf 'it does not link libgcrypt, so it has no crypto backend and guests with VGA/VNC cannot start ("Cipher backend does not support DES algorithm")'
+  else
+    # Capture ldd first: `ldd | grep -q` can make ldd die of SIGPIPE when grep
+    # exits at its first match, and pipefail then turns that into a false "no".
+    local out
+    out=$(ldd "$SIDE_BIN" 2>/dev/null) || true
+    if [[ $out == *'=>'* && $out != *libgcrypt* ]]; then
+      printf 'it does not link libgcrypt, so it has no crypto backend and guests with VGA/VNC cannot start ("Cipher backend does not support DES algorithm")'
+    fi
   fi
 }
 
@@ -508,12 +524,36 @@ del_vm() {
   say "VMID ${id} removed; next start uses the vendor binary"
 }
 
+# qad_vendor_drivers <-drive/-blockdev value>: print (one per line, once each)
+# the vendor-only block driver names it selects: rbd, pbs, alloc-track,
+# zeroinit. Handles comma-separated key=value tokens (driver=NAME, or a nested
+# prefix.driver=NAME) and a JSON object ("driver" : "NAME", optional spaces).
+qad_vendor_drivers() {
+  local v=$1 t d rest seen=" "
+  local -a toks
+  local re='"driver"[[:space:]]*:[[:space:]]*"(rbd|pbs|alloc-track|zeroinit)"'
+  IFS=, read -ra toks <<<"$v"
+  for t in "${toks[@]}"; do
+    [[ $t == driver=* || $t == *.driver=* ]] || continue
+    d=${t#*driver=}
+    case "$d" in rbd|pbs|alloc-track|zeroinit) [[ $seen == *" $d "* ]] || { seen+="$d "; echo "$d"; } ;; esac
+  done
+  if [[ $v == '{'* ]]; then
+    rest=$v
+    while [[ $rest =~ $re ]]; do
+      d=${BASH_REMATCH[1]}
+      [[ $seen == *" $d "* ]] || { seen+="$d "; echo "$d"; }
+      rest=${rest#*"${BASH_REMATCH[0]}"}
+    done
+  fi
+}
+
 # qad_skew_warnings <vendor argv...>: print a WARNING line for each option the
 # vendor (pve-qemu 11.x) command line uses that the side QEMU lacks. Plain
 # string checks on the option and its value only. The side version comes from
 # its own --version (QEMU_VER if it is not built).
 qad_skew_warnings() {
-  local side_ver mj mn a prev="" mv
+  local side_ver mj mn a d prev="" mv
   side_ver=$("$SIDE_BIN" --version 2>/dev/null | head -1) || true
   [[ $side_ver =~ version\ ([0-9]+)\.([0-9]+) ]] || side_ver="version ${QEMU_VER}"
   mj=0; mn=0
@@ -535,7 +575,19 @@ qad_skew_warnings() {
         case "$a" in
           *file=rbd:*|rbd:*) echo "WARNING: rbd: drive path; the side QEMU has no rbd block driver (Ceph disks unsupported on listed guests)." ;;
           *file=pbs:*|pbs:*) echo "WARNING: pbs: drive path; the side QEMU has no pbs block driver." ;;
-        esac ;;
+        esac
+        # -blockdev forms (PVE emits these for machine >= 10.0): key=value
+        # tokens and JSON. Only whole driver=NAME tokens / "driver": "NAME"
+        # members count, so a file or VM name merely containing rbd or
+        # driver=raw does not warn.
+        while IFS= read -r d; do
+          [[ -n $d ]] || continue
+          case "$d" in
+            rbd) echo "WARNING: driver=rbd block device; the side QEMU has no rbd block driver (Ceph disks unsupported on listed guests)." ;;
+            pbs) echo "WARNING: driver=pbs block device; the side QEMU has no pbs block driver." ;;
+            *) echo "WARNING: driver=${d} block device; the side QEMU has no ${d} block driver (pve-qemu patch)." ;;
+          esac
+        done < <(qad_vendor_drivers "$a") ;;
       -device)
         [[ $a == qxl* ]] && echo "WARNING: -device ${a%%,*}: qxl needs SPICE support, which the side QEMU lacks." ;;
     esac

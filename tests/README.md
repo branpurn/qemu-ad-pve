@@ -115,6 +115,7 @@ Runs `tier2.sh gate` under `env -i` with a temp stub dir first on `PATH` (stub `
 stub `hostname`, `pvecm`), after checking that `qm` resolves to the stub. Fixtures are made-up (`100 101 300`, test range 900-902).
 It covers: failing `qm list`, a protected VMID first in a 500-row (>64 KiB) list run 50 times, each protected VMID, VMIDs
 outside the test range, wrong hostname, unset/empty/invalid `QAD_PROTECTED_VMIDS`, `none`, `TEST_VMID_BASE`, unset `REF`, and the passing cases.
+It also asserts that when the gate refuses, `gate`, `setup`, `teardown` and `table` create no file or directory (no `WORK_DIR`/`OUT`), and that `table` creates `OUT` only after the gate passes. `tier1.sh` (C24) runs this test too.
 
 ## W10 Code 43 check
 

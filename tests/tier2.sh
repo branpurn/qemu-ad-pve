@@ -405,7 +405,7 @@ teardown() {
 }
 
 table() {
-  init_out
+  gate   # like every other subcommand: gate first (it runs init_out itself once it passes); nothing is created before
   { echo "| ID | Result | Evidence | Notes |"; echo "|---|---|---|---|"
     awk -F'\t' '{printf "| %s | %s | %s | %s |\n",$1,$2,$3,$4}' "$RES"; } | tee "$OUT/results.md"
   echo; echo "ref: $(cat "$OUT/ref.txt" 2>/dev/null | tr '\n' ' ')"

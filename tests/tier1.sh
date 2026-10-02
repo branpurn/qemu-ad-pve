@@ -859,5 +859,16 @@ chk "C23r README uses pcie-root-port, not ich9-pcie-port, as the device name" 'g
 chk "C23s README: libusb-1.0-0 runtime lib must stay installed (apt-mark manual libusb-1.0-0)" 'grep -q "apt-mark manual libusb-1.0-0" "$R2" && grep -q "libusb-1.0-0-dev" "$R2"'
 chk "C23t README: rebuild estimate is no longer just 'a minute or two' and gives the 30-60 minute small-host range" '! grep -q "a minute or two" "$R2" && grep -q "30-60 minutes" "$R2" && ! grep -q "[^0-9]1-2 minutes" "$R2"'
 
+echo "== C24 tier-2 runner: no mutation before the safety gate (tests/tier2-gate-test.sh, hermetic stubs, no root/PVE)"
+TD=$(dirname "$SCRIPT")/tests
+if [[ -r $TD/tier2-gate-test.sh && -r $TD/tier2.sh ]]; then
+  g=$(bash "$TD/tier2-gate-test.sh" 2>&1); grc=$?
+  chk "C24a tier2-gate-test.sh passes ($(tail -1 <<<"$g"))" '[[ $grc -eq 0 ]] && tail -1 <<<"$g" | grep -q "fail=0$"'
+  chk "C24b every table/gate/setup/teardown refusal left no files or directories behind" '! grep -q "^FAIL.*created" <<<"$g" && grep -q "^PASS  table, gate refuses (wrong host): aborts" <<<"$g" && grep -q "^PASS  table, protected VMID present: aborts" <<<"$g" && ! grep -q "^FAIL" <<<"$g"'
+  chk "C24c tier2.sh table calls gate before anything else" 'awk "/^table\(\) \{/{f=1;next} f&&NF{print;exit}" "$TD/tier2.sh" | grep -q "^ *gate\b"'
+else
+  note "C24 tests/tier2-gate-test.sh or tier2.sh not found next to the script; skipped"
+fi
+
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

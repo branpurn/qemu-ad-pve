@@ -5,7 +5,8 @@
 # SAFE BY CONSTRUCTION: every run of tier2.sh happens under `env -i` with PATH = <temp stub dir>:/usr/bin:/bin, so
 # `qm`, `hostname` and `pvecm` are stubs that only print canned output (the qm stub logs each call and refuses
 # anything except `qm list`). Before any test, the script verifies that `qm` resolves to the stub. tier2.sh is only
-# ever invoked with the `gate` or `setup` (REF unset => refuses before doing anything) subcommands, and with
+# ever invoked with the `gate`, `setup` (REF unset => refuses before doing anything), `teardown` and `table`
+# subcommands (the last two only with a gate that refuses, or `table` which only prints a report), and with
 # WORK_DIR/HOME pointing into the temp dir. All VMIDs here (100, 101, 300, 500, 900-902, ...) are made-up fixtures.
 #
 # Usage: bash tests/tier2-gate-test.sh        (exit 0 = all pass; the last line is `GATE TEST: pass=N fail=M`)
@@ -124,6 +125,30 @@ reset; gate KVM_DEV="$ROOT/no-such-dev"; expect "no /dev/kvm: aborts" abort "kvm
 reset; run_t2 setup "${DEFAULT_ENV[@]}"; [[ $rc -ne 0 && $out == *"REF"* ]] && ok "setup without REF: refuses" || bad "setup without REF (rc=$rc out=${out:0:160})"
 only_list_calls && ok "  ... only 'qm list' was called" || bad "  ... other qm calls: $(cat "$STUB/qm.calls")"
 reset; run_t2 setup "${DEFAULT_ENV[@]}" REF=abc123; [[ $rc -ne 0 && $out == *"REF"* ]] && ok "setup with a short REF: refuses" || bad "setup with short REF (rc=$rc out=${out:0:160})"
+# --- no mutation before the gate passes: when the gate refuses, no directory or file may be created
+# (WORK_DIR, OUT, results.tsv, run.log, ...). Only subcommands that are safe to run hermetically are exercised: with a
+# refusing gate each one must stop in gate() (setup also has the unset-REF refusal behind it); `table` is a pure report.
+fs_clean() { [[ -z $(ls -A "$ROOT/work" 2>/dev/null) && -z $(ls -A "$ROOT/home" 2>/dev/null) ]]; }
+wipe()     { rm -rf "$ROOT/work" "$ROOT/home"; mkdir -p "$ROOT/work" "$ROOT/home"; }
+for sub in gate setup teardown table; do
+  wipe; reset; run_t2 "$sub" "${DEFAULT_ENV[@]}" TEST_HOSTNAME=some-other-node
+  [[ $rc -ne 0 && $out == *"wrong host"* ]] && ok "$sub, gate refuses (wrong host): aborts" || bad "$sub wrong host (rc=$rc out=${out:0:160})"
+  fs_clean && ok "  ... and created no files or directories" || bad "  ... $sub created: $(find "$ROOT/work" "$ROOT/home" | head -5 | tr '\n' ' ')"
+  wipe; reset; run_t2 "$sub" TEST_HOSTNAME=gate-test-node KVM_DEV=/dev/null    # QAD_PROTECTED_VMIDS unset
+  [[ $rc -ne 0 && $out == *"QAD_PROTECTED_VMIDS"* ]] && ok "$sub, QAD_PROTECTED_VMIDS unset: aborts" || bad "$sub unset protected (rc=$rc out=${out:0:160})"
+  fs_clean && ok "  ... and created no files or directories" || bad "  ... $sub created: $(find "$ROOT/work" "$ROOT/home" | head -5 | tr '\n' ' ')"
+  wipe; reset; set_list "$(row 100)"; run_t2 "$sub" "${DEFAULT_ENV[@]}"        # protected VMID present
+  [[ $rc -ne 0 && $out == *"protected VMID 100"* ]] && ok "$sub, protected VMID present: aborts" || bad "$sub protected VMID (rc=$rc out=${out:0:160})"
+  fs_clean && ok "  ... and created no files or directories" || bad "  ... $sub created: $(find "$ROOT/work" "$ROOT/home" | head -5 | tr '\n' ' ')"
+done
+wipe; reset; run_t2 table "${DEFAULT_ENV[@]}" 'WORK_DIR=relative/dir'
+[[ $rc -ne 0 && $out == *"absolute path"* ]] && ok "table with a relative WORK_DIR: aborts" || bad "table relative WORK_DIR (rc=$rc out=${out:0:160})"
+[[ -z $(ls -A "$ROOT/work") && ! -e "$ROOT/relative" && ! -e relative ]] && ok "  ... and created nothing" || bad "  ... created files"
+wipe; reset; set_list "$(row 900)"; run_t2 table "${DEFAULT_ENV[@]}"
+[[ $rc -eq 0 && $out == *"gate ok"* && $out == *"| ID | Result |"* ]] && ok "table with a passing gate: prints the table" || bad "table, gate ok (rc=$rc out=${out:0:160})"
+[[ -f "$ROOT/work/t2-out/results.md" && -f "$ROOT/work/t2-out/results.tsv" ]] && ok "  ... and creates OUT only now" || bad "  ... results files missing"
+only_list_calls && ok "  ... only 'qm list' was called" || bad "  ... other qm calls: $(cat "$STUB/qm.calls")"
+wipe
 # --- hermetic: nothing outside the temp dir was written
 [[ ! -e /tmp/qad-work && ! -e "$HOME/qad-work" ]] && ok "no work dir created outside the temp dir" || bad "stray work dir created"
 

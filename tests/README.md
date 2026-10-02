@@ -19,6 +19,7 @@ Nothing in here is specific to one site: node names, VMIDs, storage and bridge n
 | `tier15-guard-test.sh` | Tests of that guard (unprivileged, touches nothing). |
 | `tier2.sh` | Tier 2: the full runner (cases P0-P8) for a disposable PVE node: real build, real guests. The **only** tier-2 runner; it supersedes the earlier pre-PR #3 draft. |
 | `tier2-gate-test.sh` | Tests of the tier-2 safety gate against stub `qm`/`hostname`/`pvecm` binaries (never touches a real node). |
+| `NODE-SETUP.md` | How to set up a disposable nested PVE node for tier 2: requirements, nested virtualization, cold snapshot and rollback, repositories and ISO, and what the safety gate expects. |
 | `HARNESS-SPEC.md` | The test plan: prerequisites, safety gate, per-case steps and pass criteria. Written against PR #1 and since updated; see the notes at its top. |
 | `w10-code43-check.ps1` | Read-only PowerShell check run *inside a Windows 10 guest*: reports NVIDIA display-adapter health (Code 43) as one JSON document. |
 | `w10-code43-run.sh` | Runs the check on a guest over SSH from a Linux machine and maps the JSON result to an exit code. |
@@ -87,7 +88,7 @@ rm -rf "$fake"
 Runs **on** the test node, as root. Prerequisites: PVE with `/dev/kvm` (nested virtualization if the node is a VM), no cluster
 membership, outbound HTTPS (download.qemu.org, github.com, apt), and an Alpine "virt" ISO in the `ISO` storage (default
 `local:iso/alpine-virt.iso`; `local` and `vmbr0` are the stock PVE names, override with `ISO` / `BRIDGE`). Take a cold
-snapshot of the node before and roll back after (see the header of `tier2.sh`).
+snapshot of the node before and roll back after (see the header of `tier2.sh`). **To build such a node, see [`NODE-SETUP.md`](NODE-SETUP.md)** (nested virtualization, `cpu=host`, cold snapshot and rollback, repositories, ISO, and how the gate treats the node).
 
 **Required environment (the script refuses to start without it):**
 

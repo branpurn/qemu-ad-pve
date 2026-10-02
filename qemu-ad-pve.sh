@@ -89,6 +89,7 @@ WRAPPER_PATH="${WRAPPER_PATH:-/usr/bin/kvm}"
 VENDOR_PATH="${VENDOR_PATH:-/usr/bin/kvm.pve}"
 LOG_FILE="${LOG_FILE:-/var/log/qemu-ad-wrapper.log}"
 DPKG_LOCK="${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"
+PVE_QEMU_CONF_DIR="${PVE_QEMU_CONF_DIR:-/etc/pve/qemu-server}"
 
 # Integrity pins. Known-good SHA-256 for the versions this script has been
 # checked against (tarball verified against QEMU's signed release too). For
@@ -490,6 +491,65 @@ install_wrapper() {
   say "wrapper installed. VMIDs in ${LIST_FILE} use ${SIDE_BIN}"
 }
 
+# qad_virtio_warnings <vmid>: print a WARNING line (stdout, like the other
+# WARNING lines) for each virtio device that the VM's config says it uses. The
+# side QEMU's patch rewrites the virtio PCI vendor ID 1af4 to 8086, so guest
+# virtio drivers (matched by 1af4 IDs) do not bind. Reads
+# ${PVE_QEMU_CONF_DIR}/<vmid>.conf, only the current config (everything before
+# the first line starting with '['; later sections are snapshots). A missing or
+# unreadable file is silently skipped. Informational only: never changes the
+# exit status or what the caller does.
+qad_virtio_warnings() {
+  local f="${PVE_QEMU_CONF_DIR}/${1}.conf"
+  [[ -f $f && -r $f ]] || return 0
+  local -a lines=()
+  mapfile -t lines 2>/dev/null < "$f" || return 0
+  local line key val vdisks="" vnics="" scsis=0 scsihw="" balloon="" agent=0 tok
+  for line in "${lines[@]}"; do
+    line=${line%$'\r'}
+    [[ $line == '['* ]] && break
+    [[ $line =~ ^([a-z]+[0-9]*):[[:space:]]*(.*)$ ]] || continue
+    key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]}
+    case $key in
+      virtio[0-9]*) vdisks+="${vdisks:+, }${key}" ;;
+      scsi[0-9]*) scsis=1 ;;
+      scsihw) scsihw=$val ;;
+      net[0-9]*) [[ $val == virtio || $val == virtio=* || $val == virtio,* ]] && vnics+="${vnics:+, }${key}" ;;
+      balloon) balloon=$val ;;
+      agent)
+        # property string: "1", "enabled=1", optionally ",type=isa" (isa-serial, not virtio)
+        local en=0 isa=0
+        local -a toks=()
+        IFS=',' read -r -a toks <<< "$val"
+        for tok in "${toks[@]}"; do
+          case $tok in
+            1|1=*|enabled=1|enabled=yes|enabled=on|enabled=true) en=1 ;;
+            type=isa) isa=1 ;;
+          esac
+        done
+        agent=$(( en && ! isa ))
+        ;;
+    esac
+  done
+  local see="Guest device compatibility in the README; switch to non-virtio devices on the vendor QEMU before add-vm."
+  if [[ -n $vdisks ]]; then
+    echo "WARNING: VM ${1} has virtio disk(s) (${vdisks}). The side QEMU shows virtio as PCI 8086:xxxx instead of 1af4:xxxx, so the guest virtio-blk driver will not bind (OVMF: 'No bootable option'). Use SATA or NVMe. See ${see}"
+  fi
+  if (( scsis )) && [[ $scsihw == virtio-scsi* ]]; then
+    echo "WARNING: VM ${1} has scsi disk(s) on scsihw ${scsihw}. virtio-scsi shows as 8086:1004 instead of 1af4:1004 on the side QEMU, so the guest vioscsi driver will not bind (OVMF: 'No bootable option'). Use SATA or NVMe, or scsihw lsi. See ${see}"
+  fi
+  if [[ -n $vnics ]]; then
+    echo "WARNING: VM ${1} has virtio NIC(s) (${vnics}). virtio-net would show as 8086:1000 instead of 1af4:1000 on the side QEMU, so the guest NetKVM driver will not bind. Use e1000e. See ${see}"
+  fi
+  if [[ $balloon =~ ^[0-9]+$ && $balloon != 0* ]]; then
+    echo "WARNING: VM ${1} has 'balloon: ${balloon}' (virtio-balloon). Its guest driver will not bind on the side QEMU. Set 'balloon: 0'. See ${see}"
+  fi
+  if (( agent )); then
+    echo "WARNING: VM ${1} has the QEMU guest agent enabled. The qemu-ga channel is a virtio-serial port (8086:1003 instead of 1af4:1003 on the side QEMU), so the guest cannot reach it and 'qm guest' commands will fail. See ${see}"
+  fi
+  return 0
+}
+
 add_vm() {
   local id="${1:-}"
   [[ $id =~ ^[1-9][0-9]*$ ]] || die "add-vm needs a numeric VMID (no leading zeros)"
@@ -504,6 +564,7 @@ add_vm() {
     say "VMID ${id} will launch on ${SIDE_BIN}"
   fi
   say "set machine to a vanilla type (pc-q35-10.1) and cpu: host,hidden=1 before starting"
+  qad_virtio_warnings "$id"
 }
 
 del_vm() {
@@ -621,6 +682,7 @@ sys.stdout.write("\0".join(shlex.split(t)))' 2>/dev/null) || true
   else
     echo "warning: could not parse qm showcmd output (python3 needed)" >&2
   fi
+  if qad_list_has "$id" "$LIST_FILE"; then qad_virtio_warnings "$id"; fi
 }
 
 status() {
@@ -763,6 +825,7 @@ env overrides (set in the environment, e.g. QEMU_VER=10.2.2 $0 install):
   VENDOR_PATH     where the vendor binary is diverted to (default ${VENDOR_PATH})
   LOG_FILE        wrapper log (default ${LOG_FILE})
   DPKG_LOCK       dpkg lock file checked before touching the divert (default ${DPKG_LOCK})
+  PVE_QEMU_CONF_DIR  where add-vm/showcmd read <vmid>.conf to warn about virtio devices (default ${PVE_QEMU_CONF_DIR})
 --purge only accepts PREFIX under /opt, /srv or /usr/local and LIST_FILE as a
 file under /etc/qemu-ad or /var/lib/qemu-ad (canonical paths, no "." or "..").
 EOF

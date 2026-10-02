@@ -56,7 +56,31 @@ Pass criteria: every script ends with `TIER15 RESULT: pass=N fail=M info=K` and 
 `tier15-window.sh` and `tier15-lock.sh` report a few-ms missing-`/usr/bin/kvm` window as `INFO` (a known low-severity finding);
 set `STRICT_WINDOW=1` to make it a `FAIL`. An empty `PREFIX` is *not* a purge-reject case: it means the default `/opt/qemu-ad`.
 
-`bash tests/tier15-guard-test.sh` tests the guard itself and needs no privileges.
+### `T15_FS_ROOT` (test hook for the guard)
+
+| | |
+|---|---|
+| What | A path prefix that `t15_guard` (in `tier15-common.sh`) puts in front of the **filesystem** probes it makes: `/usr/sbin/qm`, `/usr/bin/qm`, `/sbin/qm`, `/bin/qm`, `/usr/local/bin/qm`, `/usr/local/sbin/qm` and `/etc/pve`. With `T15_FS_ROOT=/x` the guard looks for `/x/usr/sbin/qm`, `/x/etc/pve`, and so on. |
+| Default | Unset or empty, so the probes look at the real `/`. This is the only value to use for a real tier-1.5 run. |
+| What it does **not** change | The other guard checks: `QAD_T15_SANDBOX=1`, `qm` on `PATH` (use `PATH` to control that), the installed `pve-qemu-kvm` package (looked up with `dpkg-query` on `PATH`), and `id -u` = 0. |
+| Who uses it | Only `tier15-guard-test.sh`, which points it at a fake root so the guard's refusals can be tested without a PVE node and without root. `tier1.sh`, `tier2.sh` and the three `tier15-*.sh` scripts do not use it or set it. |
+
+**Do not set it in a real run.** Pointing it at an empty directory makes the guard stop looking at the real `/usr/sbin/qm` and
+`/etc/pve`, which disables the "this looks like a PVE node" tripwire.
+
+Hermetic usage (what `tier15-guard-test.sh` does; runs unprivileged and touches only the temp dir). The guard is *called*, never
+the tier-1.5 scripts:
+
+```bash
+fake=$(mktemp -d); mkdir -p "$fake/fs/usr/sbin" "$fake/fs/etc" "$fake/stub"
+: > "$fake/fs/usr/sbin/qm"                       # pretend this root is a PVE node
+env -i PATH="$fake/stub:/usr/bin:/bin" T15_FS_ROOT="$fake/fs" QAD_T15_SANDBOX=1 \
+  bash -c 'source tests/tier15-common.sh; t15_guard; echo GUARD-PASSED'
+# -> refusing: /usr/sbin/qm exists, this looks like a PVE node      (exit 2, no GUARD-PASSED)
+rm -rf "$fake"
+```
+
+`bash tests/tier15-guard-test.sh` tests the guard itself (using `T15_FS_ROOT`, see above) and needs no privileges.
 
 ## Tier 2 (disposable Proxmox VE node)
 

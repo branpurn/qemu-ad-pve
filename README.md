@@ -170,9 +170,21 @@ tools/qemu-ad-breakglass.sh                    # dry run: prints the plan and th
 tools/qemu-ad-breakglass.sh --capture-prestate --apply   # optional: snapshot VM status/PIDs first (the verifier compares against it)
 tools/qemu-ad-breakglass.sh --apply            # restore the real kvm, then remove the VMID list, wrapper log, PREFIX and build tree
 tools/qemu-ad-breakglass.sh --verify           # read-only PASS/FAIL end-state report
+# test node only, deliberate: also destroy the VMs in QAD_BREAKGLASS_VMIDS (see the list below)
+QAD_BREAKGLASS_TEST_HOSTNAME=<this-node> QAD_BREAKGLASS_VMIDS="<vmid>" QAD_PROTECTED_VMIDS=none \
+  tools/qemu-ad-breakglass.sh --apply --destroy-vms [--clear-vm-protection]
 ```
 
-It restores the real `/usr/bin/kvm` first (removes the divert and moves `kvm.pve` back; reinstalls `pve-qemu-kvm` or, as a last resort, symlinks the packaged binary if the vendor file is gone) and removes the side QEMU only if that worked. A divert that is not ours is left alone. Guests are not touched unless you opt in with `QAD_BREAKGLASS_VMIDS="<vmid> ..."`, which also requires `QAD_PROTECTED_VMIDS="<vmid> ..."` (or the word `none`); a VMID in both lists is refused. It refuses to write to a block device, and refuses `PREFIX`/`LIST_FILE` outside the same allow-lists as `uninstall --purge`. Run `tools/qemu-ad-breakglass.sh --help` for the full list. Tests: `tests/breakglass-test.sh` (stubs only, see `tests/README.md`).
+It restores the real `/usr/bin/kvm` first (removes the divert and moves `kvm.pve` back; reinstalls `pve-qemu-kvm` or, as a last resort, symlinks the packaged binary if the vendor file is gone) and removes the side QEMU only if that worked. A divert that is not ours is left alone. Guests are not touched by default. Destroying VMs is meant for a **dedicated test node only** and needs all of the following, none of which is implied by another:
+
+- the `--destroy-vms` flag **and** `QAD_BREAKGLASS_VMIDS="<vmid> ..."` (either alone is refused, so an inherited environment variable never destroys anything);
+- `QAD_PROTECTED_VMIDS="<vmid> ..."` (or the word `none`); a VMID in both lists is refused (leading zeros are normalised: `07001` is `7001`);
+- `QAD_BREAKGLASS_TEST_HOSTNAME` equal to the node's `hostname`, `qm list` readable, the node not in a cluster, and every VM on the node named in one of the two lists;
+- a typed confirmation: the tool prints a phrase with a fresh random token (`destroy <vmids> on <hostname> <token>`) and reads your answer from the terminal; it refuses when stdin is not a terminal, so `yes |`, `</dev/null` and cron cannot confirm;
+- each target must be provably `stopped` right before `qm destroy`, and every `qm` call is checked: any failure (an unreadable `qm list`/`status`/`config`, a failed `stop` or `destroy`) exits 1 and leaves the kvm wrapper alone;
+- a VM with PVE's own `protection` flag is only destroyed if you also pass `--clear-vm-protection`.
+
+`--capture-prestate` fails (and writes nothing) if any `qm` call fails. The tool refuses to write to a block or character device (or anything under `/dev`, `/proc`, `/sys`), refuses paths with characters other than letters, digits and `. _ / + @ : -`, refuses a `PREFIX` that contains or nests with `SRC_ROOT`, the wrapper, the list, the log or the state dir, only deletes a `PREFIX` that looks like ours (has `bin/qemu-system-x86_64` or the build stamp, or is empty), and refuses `PREFIX`/`LIST_FILE` outside the same allow-lists as `uninstall --purge`. Run `tools/qemu-ad-breakglass.sh --help` for the full list. Tests: `tests/breakglass-test.sh` (stubs only, see `tests/README.md`).
 
 ## Upstream
 

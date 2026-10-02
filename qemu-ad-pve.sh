@@ -504,26 +504,27 @@ qad_virtio_warnings() {
   [[ -f $f && -r $f ]] || return 0
   local -a lines=()
   mapfile -t lines 2>/dev/null < "$f" || return 0
-  local line key val vdisks="" vnics="" scsis=0 scsihw="" balloon="" agent=0 tok
+  local line key val vdisks="" vnics="" scsis=0 scsihw="" balloon="" has_balloon=0 agent=0 tok
   for line in "${lines[@]}"; do
     line=${line%$'\r'}
     [[ $line == '['* ]] && break
     [[ $line =~ ^([a-z]+[0-9]*):[[:space:]]*(.*)$ ]] || continue
     key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]}
+    val=${val%"${val##*[![:space:]]}"}   # trim trailing blanks
     case $key in
       virtio[0-9]*) vdisks+="${vdisks:+, }${key}" ;;
       scsi[0-9]*) scsis=1 ;;
       scsihw) scsihw=$val ;;
       net[0-9]*) [[ $val == virtio || $val == virtio=* || $val == virtio,* ]] && vnics+="${vnics:+, }${key}" ;;
-      balloon) balloon=$val ;;
+      balloon) balloon=$val; has_balloon=1 ;;
       agent)
-        # property string: "1", "enabled=1", optionally ",type=isa" (isa-serial, not virtio)
+        # property string: "1"/"yes"/"on"/"true", "enabled=1", optionally ",type=isa" (isa-serial, not virtio)
         local en=0 isa=0
         local -a toks=()
         IFS=',' read -r -a toks <<< "$val"
         for tok in "${toks[@]}"; do
           case $tok in
-            1|1=*|enabled=1|enabled=yes|enabled=on|enabled=true) en=1 ;;
+            1|yes|on|true|enabled=1|enabled=yes|enabled=on|enabled=true) en=1 ;;
             type=isa) isa=1 ;;
           esac
         done
@@ -541,7 +542,9 @@ qad_virtio_warnings() {
   if [[ -n $vnics ]]; then
     echo "WARNING: VM ${1} has virtio NIC(s) (${vnics}). virtio-net would show as 8086:1000 instead of 1af4:1000 on the side QEMU, so the guest NetKVM driver will not bind. Use e1000e. See ${see}"
   fi
-  if [[ $balloon =~ ^[0-9]+$ && $balloon != 0* ]]; then
+  if (( ! has_balloon )); then
+    echo "INFO: VM ${1} has no 'balloon:' line. Proxmox then adds a virtio-balloon device by default, whose guest driver will not bind on the side QEMU. Set 'balloon: 0' to leave it out."
+  elif [[ $balloon =~ ^[0-9]+$ && $balloon != 0* ]]; then
     echo "WARNING: VM ${1} has 'balloon: ${balloon}' (virtio-balloon). Its guest driver will not bind on the side QEMU. Set 'balloon: 0'. See ${see}"
   fi
   if (( agent )); then

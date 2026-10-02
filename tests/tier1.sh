@@ -760,6 +760,23 @@ vm 318 'agent: 1,type=isa'
 o=$(av 318); chk "C22r agent type=isa (isa-serial, not virtio-serial): no WARNING (inferred from qemu-server, not from the evidence files)" '[[ $(vwarn "$o") -eq 0 ]]'
 vm 319 'memory: 4096' 'cores: 2'
 o=$(av 319); chk "C22s no balloon line at all: no WARNING (default ballooning is documented in the README, not warned)" '[[ $(vwarn "$o") -eq 0 ]]'
+# --- QA LOWs: bare booleans, trailing blanks, INFO note for an absent balloon line
+for v in 'agent: yes' 'agent: on' 'agent: true' 'agent: enabled=yes' 'agent: enabled=on' 'agent: enabled=true' 'agent: 1 ' 'agent: yes,type=virtio' 'agent: type=virtio,enabled=1'; do
+  vm 340 "$v" 'balloon: 0'; o=$(av 340); chk "C22b1 '$v': WARNING mentioning agent" '[[ $o == *WARNING*agent* ]]'
+done
+for v in 'agent: no' 'agent: off' 'agent: false' 'agent: 0' 'agent: enabled=no' 'agent: enabled=0' 'agent: yes,type=isa'; do
+  vm 341 "$v" 'balloon: 0'; o=$(av 341); chk "C22b2 '$v': no WARNING" '[[ $(vwarn "$o") -eq 0 ]]'
+done
+vm 342 'balloon: 1024 ' 'agent: 0'; o=$(av 342); chk "C22b3 'balloon: 1024 ' (trailing blank): WARNING mentioning balloon" '[[ $o == *WARNING*balloon* ]]'
+vm 343 'balloon: 0 ' 'agent: 0'; o=$(av 343); chk "C22b4 'balloon: 0 ' (trailing blank): no WARNING, no INFO" '[[ $(vwarn "$o") -eq 0 && $o != *INFO:*balloon* ]]'
+vm 344 'memory: 4096' 'net0: e1000e=AA:BB:CC:DD:EE:44,bridge=vmbr0'
+o=$(av 344); chk "C22b5 no balloon: line: an INFO line (not WARNING) about the default balloon, mentioning 'balloon: 0'" '[[ $o == *"INFO:"*balloon*"balloon: 0"* && $(vwarn "$o") -eq 0 ]]'
+vm 345 'balloon: 0'; o=$(av 345); chk "C22b6 balloon: 0 present: no INFO about balloon" '[[ $o != *INFO:*balloon* ]]'
+vm 346 'balloon: 512'; o=$(av 346); chk "C22b7 balloon: 512: WARNING, and no extra INFO about a missing line" '[[ $o == *WARNING*balloon* && $o != *INFO:*balloon* ]]'
+vm 347 'memory: 4096' '' '[snap]' 'balloon: 0'; o=$(av 347); chk "C22b8 balloon: 0 only inside a snapshot section: still INFO (current config has no balloon line)" '[[ $o == *INFO:*balloon* ]]'
+fresh; o=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" L 'add_vm 348' 2>&1); chk "C22b9 missing conf: no INFO either (silent)" '[[ $o != *INFO:*balloon* ]]'
+fresh; so=$(PVE_QEMU_CONF_DIR="$CF" L 'add_vm 344' 2>/dev/null); chk "C22b10 INFO goes to stdout" '[[ $so == *INFO:*balloon* ]]'
+fresh; PVE_QEMU_CONF_DIR="$CF" L 'add_vm 344' >/dev/null 2>&1; rc=$?; chk "C22b11 INFO does not change the exit code (rc 0, VMID listed)" '[[ $rc -eq 0 ]] && grep -qx 344 "$T/vms"'
 # --- snapshot sections are ignored (only the current config, above the first '[')
 vm 320 'net0: e1000e=AA:BB:CC:DD:EE:20,bridge=vmbr0' 'sata0: local-lvm:vm-320-disk-0,size=32G' 'parent: before' '' '[before]' 'virtio0: local-lvm:vm-320-disk-0,size=32G' 'net0: virtio=AA:BB:CC:DD:EE:20,bridge=vmbr0' 'agent: 1' 'balloon: 2048' 'scsihw: virtio-scsi-pci' 'scsi0: x:y'
 o=$(av 320); chk "C22t virtio only inside a [snapshot] section: no WARNING" '[[ $(vwarn "$o") -eq 0 ]]'
@@ -794,8 +811,8 @@ o=$(PVE_QEMU_CONF_DIR="$CF" sk 330 '331\n' "${cleanbase[@]}"); chk "C22z6 showcm
 vm 331 'net0: e1000e=AA:BB:CC:DD:EE:31,bridge=vmbr0' 'sata0: x:y'
 o=$(PVE_QEMU_CONF_DIR="$CF" sk 331 '331\n' '/usr/bin/kvm \' '  -id 331 \' '  -pidfile /var/run/qemu-server/331.pid \' '  -name vm'); chk "C22z7 showcmd listed + clean conf: no WARNING" '[[ $(vwarn "$o") -eq 0 ]]'
 o=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" sk 330 '330\n' "${cleanbase[@]}"); chk "C22z8 showcmd listed + missing conf: silent" '[[ $(vwarn "$o") -eq 0 ]]'
-a=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" sk 330 '330\n' "${cleanbase[@]}" | grep -v '^WARNING'); b=$(PVE_QEMU_CONF_DIR="$CF" sk 330 '330\n' "${cleanbase[@]}" | grep -v '^WARNING')
-chk "C22z9 showcmd output apart from the WARNING lines is identical with and without the conf" '[[ -n $a && $a == "$b" ]]'
+a=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" sk 330 '330\n' "${cleanbase[@]}" | grep -Ev '^(WARNING|INFO:)'); b=$(PVE_QEMU_CONF_DIR="$CF" sk 330 '330\n' "${cleanbase[@]}" | grep -Ev '^(WARNING|INFO:)')
+chk "C22z9 showcmd output apart from the WARNING/INFO lines is identical with and without the conf (apart from INFO)" '[[ -n $a && $a == "$b" ]]'
 fresh; printf '330\n' > "$T/vms"
 { printf '#!/bin/bash\n[[ $1 == showcmd ]] || exit 0\ncat <<"EOQ"\n'; printf '%s\n' "${cleanbase[@]}"; printf 'EOQ\n'; } > "$W/stub/qm"; chmod +x "$W/stub/qm"
 PVE_QEMU_CONF_DIR="$CF" L "QEMU_VER=10.2.2; SIDE_BIN='$W/side102'; showcmd 330" >/dev/null 2>&1; rc=$?
@@ -832,6 +849,15 @@ chk "C23h says del-vm restores normal IDs (patch only on the side binary)" 'grep
 chk "C23i mentions the default balloon behaviour (ballooning is on when the line is absent)" 'grep -qi "balloon" <<<"$gsec" && grep -qi "default" <<<"$gsec"'
 chk "C23j documents the add-vm/showcmd WARNING and PVE_QEMU_CONF_DIR" 'grep -q "PVE_QEMU_CONF_DIR" "$R2" && grep -q "WARNING" <<<"$gsec"'
 chk "C23k mentions the OVMF No bootable option / Setup symptom" 'grep -qi "No bootable option" <<<"$gsec"'
+chk "C23l header appears exactly once" '[[ $(grep -c "^## Guest device compatibility" "$R2") -eq 1 ]]'
+chk "C23m table rows virtio-blk/virtio-balloon/virtio-net are flagged inferred and never say Yes" '(for k in "virtio-blk" "virtio-balloon" "virtio-net"; do grep -F "| $k" "$R2" | grep -qi inferred || exit 1; grep -F "| $k" "$R2" | grep -q "| Yes" && exit 1; done; exit 0)'
+chk "C23n table: virtio rows all say No, AHCI and e1000e rows say Yes" '(for k in virtio-scsi-pci "virtio-serial" virtio-net "virtio-blk" virtio-balloon; do grep -F "| $k" "$R2" | grep -q "| No" || exit 1; done; for k in "AHCI SATA" "e1000e NIC"; do grep -F "| $k" "$R2" | grep -q "| Yes" || exit 1; done; exit 0)'
+chk "C23o README says ballooning is on by default and that the INFO line exists" 'grep -qi "ballooning is on by default" "$R2" && grep -q "INFO" <<<"$gsec"'
+chk "C23p README names PVE_QEMU_CONF_DIR with its default /etc/pve/qemu-server" 'grep -q "default \`/etc/pve/qemu-server\`" "$R2"'
+chk "C23q README: e1000e is the verified NIC, others untested; vmxnet3 not recommended (no inbox Windows driver)" 'grep -qi "e1000e.*verified\|verified.*e1000e" <<<"$gsec" && grep -qi "untested" <<<"$gsec" && grep -qi "vmxnet3" <<<"$gsec" && grep -qi "no inbox" <<<"$gsec" && ! grep -qF "similar: rtl8139, vmxnet3" "$R2"'
+chk "C23r README uses pcie-root-port, not ich9-pcie-port, as the device name" 'grep -q "pcie-root-port" "$R2" && ! grep -q "ich9-pcie-port" "$R2"'
+chk "C23s README: libusb-1.0-0 runtime lib must stay installed (apt-mark manual libusb-1.0-0)" 'grep -q "apt-mark manual libusb-1.0-0" "$R2" && grep -q "libusb-1.0-0-dev" "$R2"'
+chk "C23t README: rebuild estimate is no longer just 'a minute or two' and gives the 30-60 minute small-host range" '! grep -q "a minute or two" "$R2" && grep -q "30-60 minutes" "$R2" && ! grep -q "[^0-9]1-2 minutes" "$R2"'
 
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

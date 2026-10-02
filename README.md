@@ -32,7 +32,7 @@ A `+pveN` machine-type suffix is stripped only on the side-binary path. Vanilla 
 - The **virtio-serial** channel behind the guest agent (qemu-ga) was lost.
 - A **virtio-net** NIC would show as `8086:1000`; the test guest used e1000e instead.
 
-A listed guest therefore needs **non-virtio devices**: a SATA or NVMe disk, an e1000e (or similar: rtl8139, vmxnet3) NIC, and no reliance on virtio-balloon or qemu-ga. The other option is a guest driver that matches the spoofed IDs.
+A listed guest therefore needs **non-virtio devices**: a SATA or NVMe disk, an e1000e NIC, and no reliance on virtio-balloon or qemu-ga. e1000e (82574L) is the NIC that was tested and verified on the side QEMU. Other emulated NICs (rtl8139, e1000, vmxnet3) are untested here and are not recommended without a test; note that vmxnet3 has no inbox Windows driver, so a fresh Windows install would be left without a network. NVMe is also untested (no row below). The other option is a guest driver that matches the spoofed IDs.
 
 **Switch the guest's devices before you add it to the list.** Do it on the vendor QEMU (the guest is not yet in `/etc/qemu-ad/vms`), so the guest OS installs the SATA and e1000e drivers while it still boots normally. Only then run `add-vm`. In practice, for Windows:
 
@@ -50,7 +50,7 @@ A listed guest therefore needs **non-virtio devices**: a SATA or NVMe disk, an e
 - `balloon: N` with N other than 0;
 - the guest agent enabled (`agent: 1` or `agent: enabled=1`), because the qemu-ga channel is a virtio-serial port. `type=isa` is not warned about.
 
-The warning changes nothing: `add-vm` still adds the guest and `showcmd` still prints, and the exit status is the same. Only the current config is read, up to the first `[snapshot]` section. If the file is missing or unreadable the check is skipped without a message. The directory can be changed with `PVE_QEMU_CONF_DIR` (default `/etc/pve/qemu-server`); the tests use it. It is a check of the config lines only: it does not look at `args:` lines or at devices that Proxmox adds by default. **Ballooning is on by default in Proxmox** when the config has no `balloon:` line, so a guest without `balloon: 0` can still get a virtio-balloon device without a warning. Set `balloon: 0` explicitly.
+The warning changes nothing: `add-vm` still adds the guest and `showcmd` still prints, and the exit status is the same. Only the current config is read, up to the first `[snapshot]` section. If the file is missing or unreadable the check is skipped without a message. The directory can be changed with `PVE_QEMU_CONF_DIR` (default `/etc/pve/qemu-server`); the tests use it. It is a check of the config lines only: it does not look at `args:` lines or at devices that Proxmox adds by default. **Ballooning is on by default in Proxmox** when the config has no `balloon:` line, so a guest without `balloon: 0` can still get a virtio-balloon device without a warning. Set `balloon: 0` explicitly. When the config has no `balloon:` line, `add-vm` and `showcmd` print one `INFO:` line (not a `WARNING`) saying so; it is only printed when the config file was read.
 
 ### Device table
 
@@ -65,7 +65,7 @@ Vendor ID is what the guest sees on the vendor QEMU; side ID is what it sees on 
 | virtio-balloon | `1af4:*` (inferred) | `8086:*` (inferred) | No (inferred: same rewrite; not tested, exact IDs not recorded) |
 | AHCI SATA controller (ICH9) | `8086:2922` | `8086:2922` | Yes. SATA disk boots and installs |
 | e1000e NIC (82574L) | `8086:10d3` | `8086:10d3` | Yes |
-| PCIe root port (`ich9-pcie-port-N`) | `1b36:000c` | `8086:000c` | Yes (only the ID changes; no guest driver needed) |
+| PCIe root port (`pcie-root-port`) | `1b36:000c` | `8086:000c` | Yes (only the ID changes; no guest driver needed) |
 | PCI bridge (`pci.N`) | `1b36:0001` | `8086:0001` | Yes (only the ID changes) |
 | Standard VGA | `1234:1111` | not present with `vga none` | n/a. Test guests used `vga none` with a passed-through GPU |
 | ICH9 LPC (`2918`), AHCI (`2922`), SMBus (`2930`), USB UHCI/EHCI (`2934` to `2939`, `293a`, `293c`), HD audio (`293e`), host bridge (`29c0`) | subsystem `1af4:1100` | subsystem `8086:8086` | Yes (only the subsystem ID changes; the device ID stays `8086:xxxx`) |
@@ -140,9 +140,9 @@ On the side-binary path the wrapper removes options that vanilla QEMU does not u
 
 The side build also passes `--disable-spice --disable-rbd --disable-curl --disable-usb-redir`, so the result does not depend on which dev packages the build host happens to have. Changing the flag list changes the stamp, so an existing build made with other flags (for example one from before these `--disable-*` flags) is rebuilt by the next `install`.
 
-**USB passthrough:** `-device usb-host` (`qm set <vmid> --usb0 host=<vid>:<pid>`) is supported: the side build uses `--enable-libusb` (`libusb-1.0-0-dev` is installed by `install`). `usb-redir` and SPICE are still not supported. The host needs access to `/dev/bus/usb` (QEMU runs as root under PVE, so this is normally fine). A real passthrough test needs a physical USB device on the host; the tier-1 tests only check the build flags, the dependency and the rebuild, not a device. An existing install built with `--disable-libusb` is rebuilt once by the next `install`, which also installs the new build dependency first.
+**USB passthrough:** `-device usb-host` (`qm set <vmid> --usb0 host=<vid>:<pid>`) is supported: the side build uses `--enable-libusb` (`libusb-1.0-0-dev` is installed by `install`). `usb-redir` and SPICE are still not supported. The host needs access to `/dev/bus/usb` (QEMU runs as root under PVE, so this is normally fine). A real passthrough test needs a physical USB device on the host; the tier-1 tests only check the build flags, the dependency and the rebuild, not a device. An existing install built with `--disable-libusb` is rebuilt once by the next `install`, which also installs the new build dependency first. `usb-host` also needs the runtime library `libusb-1.0-0` at run time. It is pulled in by the `libusb-1.0-0-dev` build dependency, so keep it installed: run `apt-mark manual libusb-1.0-0` so that `apt autoremove` does not remove it later (the script does not do this for you).
 
-Builds made before this check have no crypto backend, so a guest with a VGA/VNC console fails to start. `install` now rebuilds the side binary when it is missing the backend: it compares the configure flags recorded in `/opt/qemu-ad/.qemu-ad-configure-flags` with the current ones, and for a build that predates the stamp it checks with `ldd` that `libgcrypt` is linked. `status` prints a `WARNING` for the same condition. The rebuild takes a minute or two on 8 vCPUs; `FORCE_REBUILD=1 ./qemu-ad-pve.sh install` forces one.
+Builds made before this check have no crypto backend, so a guest with a VGA/VNC console fails to start. `install` now rebuilds the side binary when it is missing the backend: it compares the configure flags recorded in `/opt/qemu-ad/.qemu-ad-configure-flags` with the current ones, and for a build that predates the stamp it checks with `ldd` that `libgcrypt` is linked. `status` prints a `WARNING` for the same condition. The first `install` and any rebuild is a full QEMU compile: it takes from about a minute on a fast 8-core machine (warm caches) to 30-60 minutes on small hosts, depending on CPU. `FORCE_REBUILD=1 ./qemu-ad-pve.sh install` forces one.
 
 ## Do not `apt remove pve-qemu-kvm` while diverted
 

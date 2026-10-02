@@ -15,7 +15,7 @@ Target: `branpurn/qemu-ad-pve`. Originally written against PR #1 (branch `fix/wr
   - Original `main`: 29 pass, 23 fail. This confirms the harness detects the original bugs.
   - PR commit `2b6a4e6`: 47 pass, **4 fail**. The `--purge` guard can be bypassed with `PREFIX=/opt/../usr`, `/opt/qemu-ad/../..`, `/usr/local/bin` and `/usr/local/../../etc`.
   - A follow-up commit `2af5813` exists locally and is **not pushed**. It closes the purge bypass, validates `--purge` before any uninstall action, and rolls the divert back if the final `mv` of the wrapper fails. It scores 53 pass, 0 fail. Pushing it to the PR branch needs the maintainer's approval, because only `2b6a4e6`. See Open questions.
-- Tier 2 must run on a throwaway nested PVE with a snapshot taken before and a rollback after. It must never run on a host that carries VMs 110, 115, 200 or 245.
+- Tier 2 must run on a throwaway nested PVE with a snapshot taken before and a rollback after. It must never run on a host that carries any VM you care about: list them in `QAD_PROTECTED_VMIDS`; the gate also refuses any VMID outside the test range.
 
 ## 1. Scope and non-goals
 
@@ -28,12 +28,12 @@ Out of scope: live backup and live migration of side-binary guests (documented a
 - **Nested virtualization** on the outer host: `cat /sys/module/kvm_intel/parameters/nested` (or `kvm_amd`) must print `Y` or `1`. The outer VM uses CPU type `host`. Inside it, `egrep -c '(vmx|svm)' /proc/cpuinfo` must be greater than 0 and `/dev/kvm` must exist.
 - **Size:** 8 vCPU, 16 GB RAM, 60 GB disk (the source tree and build take about 10 GB). Add 30 GB if the upgrade test caches debs.
 - **Network:** outbound HTTPS for `download.qemu.org`, `github.com` and the Proxmox repos. Use the no-subscription repo on the test node. This matters because `apt-get update` returns 100 on the enterprise repo without a subscription, and install runs under `set -e`. That is a known issue held for the follow-up PR.
-- **Isolation:** the node has no cluster membership, no shared storage, and no network path to production guests. Use VMIDs 9001-9003 for test guests, never any production VMID.
+- **Isolation:** the node has no cluster membership, no shared storage, and no network path to production guests. Use the test VMIDs (default 900-902, `TEST_VMID_BASE` to move them) for test guests, never any production VMID.
 - **Build time:** the QEMU 10.2.2 build is about 15-30 minutes on 8 vCPU. Do it once in step P0 and reuse it. Cases P1-P7 need `SIDE_BIN` to exist, so they do not rebuild.
 - **Tools on the node:** `git`, `socat`, `strace` (optional), `python3`, `inotify-tools` (optional, for the inotify watcher), `sha256sum`, and a tiny bootable image for the smoke test, such as the Alpine "virt" ISO uploaded to `local` storage.
 - **Environment variables used below:**
-  - `ADP=/root/qemu-ad-pve/qemu-ad-pve.sh`
-  - Fetch with `git clone https://github.com/branpurn/qemu-ad-pve /root/qemu-ad-pve && git -C /root/qemu-ad-pve checkout <full-40-hex-sha>`
+  - `ADP=$WORK/qemu-ad-pve/qemu-ad-pve.sh`
+  - Fetch with `git clone https://github.com/branpurn/qemu-ad-pve $WORK/qemu-ad-pve && git -C $WORK/qemu-ad-pve checkout <full-40-hex-sha>`
   - Record `sha256sum $ADP` in the results.
 
 ## 3. Setup, safety gate and teardown
@@ -48,26 +48,34 @@ Out of scope: live backup and live migration of side-binary guests (documented a
   - **Pass:** `qm listsnapshot <outer_vmid>` shows `pre-qemu-ad`.
 - **S2. Safety gate.** Put this at the top of every tier-2 script. It must pass or the run stops.
   ```bash
-  set -euo pipefail
+  set -uo pipefail
   [[ $(hostname) == "$TEST_HOSTNAME" ]] || { echo ABORT: wrong host; exit 99; }
-  if qm list | awk 'NR>1{print $1}' | grep -Eqx '110|115|200|245'; then echo ABORT: production VMID present; exit 99; fi
+  [[ -n ${QAD_PROTECTED_VMIDS//[[:space:]]/} ]] || { echo "ABORT: set QAD_PROTECTED_VMIDS (or the word none)"; exit 99; }
+  # capture first and fail closed: `qm list | ... | grep -q` fails OPEN under pipefail when qm errors, and
+  # grep -q exits early on a long list (SIGPIPE).
+  lst=$(qm list 2>&1) || { echo "ABORT: qm list failed"; exit 99; }
+  for id in $(awk '$1 == "VMID" {next} NF {print $1}' <<<"$lst"); do
+    # protected VMID, or any VMID outside the test range (V1..V3): abort
+    ...
+  done
   ! pvecm status >/dev/null 2>&1 || { echo ABORT: node is in a cluster; exit 99; }
   ```
+  The full, tested implementation is `gate()` in `tests/tier2.sh` (tests: `tests/tier2-gate-test.sh`).
 - **S3. Baseline capture.**
-  - Run `dpkg-divert --list /usr/bin/kvm`, `readlink -f /usr/bin/kvm`, `sha256sum $(readlink -f /usr/bin/kvm)`, `pveversion -v > /root/pveversion.before`, and `dpkg -S /usr/bin/kvm`.
-  - Run `qm create 9001 ...` as in 3.3 and capture the output of `qm showcmd 9001 --pretty > /root/showcmd.9001.before`.
-- **S4. Continuous watcher.** Run this in a second shell for the whole session. It proves `/usr/bin/kvm` is never missing. (Preferred: `inotifywait -m -e delete -e moved_from /usr/bin --format '%e %f' | grep --line-buffered ' kvm$' >> /root/kvm-watch.log &`. The poll loop below is the fallback that `tests/tier2.sh` uses.)
+  - Run `dpkg-divert --list /usr/bin/kvm`, `readlink -f /usr/bin/kvm`, `sha256sum $(readlink -f /usr/bin/kvm)`, `pveversion -v > $WORK/pveversion.before`, and `dpkg -S /usr/bin/kvm`.
+  - Run `qm create 900 ...` as in 3.3 and capture the output of `qm showcmd 900 --pretty > $WORK/showcmd.900.before`.
+- **S4. Continuous watcher.** Run this in a second shell for the whole session. It proves `/usr/bin/kvm` is never missing. (Preferred: `inotifywait -m -e delete -e moved_from /usr/bin --format '%e %f' | grep --line-buffered ' kvm$' >> $WORK/kvm-watch.log &`. The poll loop below is the fallback that `tests/tier2.sh` uses.)
   ```bash
-  while :; do [[ -x /usr/bin/kvm ]] || echo "MISSING $(date -Is)" >> /root/kvm-watch.log; sleep 0.05; done &
-  echo $! > /root/kvm-watch.pid
+  while :; do [[ -x /usr/bin/kvm ]] || echo "MISSING $(date -Is)" >> $WORK/kvm-watch.log; sleep 0.05; done &
+  echo $! > $WORK/kvm-watch.pid
   ```
-  Overall pass criterion for cases P1, P2 and P7: `/root/kvm-watch.log` is empty.
+  Overall pass criterion for cases P1, P2 and P7: `$WORK/kvm-watch.log` is empty.
 
 ### 3.2 Teardown (every case, and again at the end)
 
 ```bash
-for v in 9001 9002 9003; do qm stop $v --skiboot 2>/dev/null || true; qm destroy $v --purge 2>/dev/null || true; done
-kill "$(cat /root/kvm-watch.pid)" 2>/dev/null || true
+for v in 900 901 902; do qm stop $v 2>/dev/null || true; qm destroy $v --purge 2>/dev/null || true; done
+kill "$(cat $WORK/kvm-watch.pid)" 2>/dev/null || true
 $ADP uninstall --purge || true     # only after the purge-guard cases are done
 ```
 
@@ -75,15 +83,17 @@ After teardown, the outer host rolls back: stop the nested VM, run `qm rollback 
 
 ### 3.3 Test guests
 
+Test VMIDs are `TEST_VMID_BASE`, +1, +2 (default 900, 901, 902). `$WORK` below is the runner's work directory (`WORK_DIR`, default `$HOME/qad-work`). The ISO and bridge names are the stock PVE ones (`local`, `vmbr0`); override with `ISO` / `BRIDGE`.
+
 Create these once, with a tiny ISO and no data disks:
 
 ```bash
-qm create 9001 --name qad-listed   --memory 512 --cores 1 --machine pc-q35-10.1 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
-qm create 9002 --name qad-unlisted --memory 512 --cores 1 --machine pc-q35-10.1 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
-qm create 9003 --name qad-unversioned --memory 512 --cores 1 --machine q35 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
+qm create 900 --name qad-listed   --memory 512 --cores 1 --machine pc-q35-10.1 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
+qm create 901 --name qad-unlisted --memory 512 --cores 1 --machine pc-q35-10.1 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
+qm create 902 --name qad-unversioned --memory 512 --cores 1 --machine q35 --cpu host --ostype l26 --serial0 socket --vga serial0 --cdrom local:iso/alpine-virt.iso --net0 virtio,bridge=vmbr0 --onboot 0
 ```
 
-9001 is a listed guest, 9002 is a non-listed control, and 9003 is a listed guest on an unversioned machine type. qemu-server may expand `q35` to a `pc-q35-X.Y+pveN` string, which the wrapper must strip.
+900 is a listed guest, 901 is a non-listed control, and 902 is a listed guest on an unversioned machine type. qemu-server may expand `q35` to a `pc-q35-X.Y+pveN` string, which the wrapper must strip.
 
 ## 4. Tier 1: stub tier (no PVE, any Linux box, no root)
 
@@ -111,20 +121,20 @@ Known limits of tier 1:
 
 ## 5. Tier 2: nested PVE cases
 
-Common precondition for every case: S1-S4 done, the node is in the post-P0 state (installed, `SIDE_BIN` built), and `/root/kvm-watch.log` is empty at the start of the case.
+Common precondition for every case: S1-S4 done, the node is in the post-P0 state (installed, `SIDE_BIN` built), and `$WORK/kvm-watch.log` is empty at the start of the case.
 
 ### P0. Clean install (also supplies the build)
 
 - **Preconditions:** a fresh snapshot state. `dpkg-divert --list /usr/bin/kvm` prints nothing.
 - **Steps:**
-  1. `time $ADP install 2>&1 | tee /root/install.log`
-  2. `$ADP add-vm 9001 && $ADP add-vm 9003`
+  1. `time $ADP install 2>&1 | tee $WORK/install.log`
+  2. `$ADP add-vm 900 && $ADP add-vm 902`
   3. `$ADP status`
 - **Expected:**
   - `/opt/qemu-ad/bin/qemu-system-x86_64 --version` prints QEMU 10.2.2.
   - `/usr/bin/kvm` is the generated wrapper.
   - `/usr/bin/kvm.pve` is the vendor binary or symlink.
-  - `/etc/qemu-ad/vms` contains 9001 and 9003.
+  - `/etc/qemu-ad/vms` contains 900 and 902.
 - **Pass:** all four hold and the install exits 0. It must also have pulled `libaio-dev` and `liburing-dev`, and `/opt/qemu-ad/bin/qemu-system-x86_64 -drive help` or `ldd` shows `liburing` and `libaio`.
 - **Teardown:** none. Later cases reuse this state.
 
@@ -138,7 +148,7 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
   4. Second injection: `mkdir /usr/bin/kvm.qemu-ad-new`, run `$ADP install; echo rc=$?`, then `rmdir /usr/bin/kvm.qemu-ad-new`.
   5. Third injection, optional, fills the filesystem: use a loop-mounted small filesystem bound over `/usr/bin` only if the node can be rolled back. Otherwise skip.
   6. Recovery check: run `$ADP install` with no injection.
-- **Expected:** after steps 2 and 4, rc is not 0, `/usr/bin/kvm` is byte-identical to before (same sha256), `dpkg-divert --list /usr/bin/kvm` prints nothing, and `qm start 9002` still works. After step 6, the install succeeds and the divert exists.
+- **Expected:** after steps 2 and 4, rc is not 0, `/usr/bin/kvm` is byte-identical to before (same sha256), `dpkg-divert --list /usr/bin/kvm` prints nothing, and `qm start 901` still works. After step 6, the install succeeds and the divert exists.
 - **Pass:** sha256 unchanged, no divert, the watcher log is empty, and a vendor guest starts.
 - **Teardown:** remove any `kvm.qemu-ad-new` leftovers. The state after step 6 is the standard installed state.
 
@@ -148,13 +158,13 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
 - **Steps:**
   1. **Deterministic failure.** Put a shim on PATH. It makes `dpkg-divert --remove` fail with exit 2 and forwards everything else to the real binary:
      ```bash
-     mkdir -p /root/shim && cat > /root/shim/dpkg-divert <<'S'
+     mkdir -p $WORK/shim && cat > $WORK/shim/dpkg-divert <<'S'
      #!/bin/bash
      case "$*" in *--remove*) echo "dpkg: error: dpkg frontend lock held (injected)" >&2; exit 2;; esac
      exec /usr/sbin/dpkg-divert "$@"
      S
-     chmod +x /root/shim/dpkg-divert
-     PATH=/root/shim:$PATH $ADP uninstall; echo rc=$?
+     chmod +x $WORK/shim/dpkg-divert
+     PATH=$WORK/shim:$PATH $ADP uninstall; echo rc=$?
      ```
   2. Verify: `sha256sum /usr/bin/kvm` equals `W`, `dpkg-divert --list /usr/bin/kvm` still lists the divert, `/usr/bin/kvm.pve` exists, and `ls /usr/bin/kvm.qemu-ad-removed` fails.
   3. **Real lock.** Hold the dpkg lock and run uninstall:
@@ -164,70 +174,70 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
      ```
      Whether a stock `dpkg-divert` honors that lock varies by dpkg version. Record what happened. Either outcome (a clean uninstall or a failure with the wrapper restored) is acceptable. `kvm` must exist at every moment either way.
   4. Release the lock (`wait`), then run the clean uninstall: `$ADP uninstall; echo rc=$?`
-  5. `qm start 9002` works.
+  5. `qm start 901` works.
 - **Expected:**
   - After step 1: rc is 1, the wrapper is restored, and nothing is changed.
   - After step 4: rc is 0, `/usr/bin/kvm` is the original vendor file, `dpkg-divert --list /usr/bin/kvm` prints nothing, and `kvm.pve` is gone.
 - **Pass:** the watcher log is empty throughout, the hash checks hold, and the final state has `kvm` as vendor.
-- **Teardown:** reinstall with `$ADP install` and re-add VM 9001 and 9003 (`add-vm`) to restore the installed state.
+- **Teardown:** reinstall with `$ADP install` and re-add VM 900 and 902 (`add-vm`) to restore the installed state.
 
 ### P3. `-id` handling for listed VMs (case 3)
 
-- **Preconditions:** installed state. 9001 listed, 9002 not listed.
-- **Step 0 (confirm the premise).** On this node, `qm showcmd 9001 | tr ' ' '\n' | grep -x -- -id` must print `-id`. If it does not, record that qemu-server on this version does not emit `-id`. The fix is then harmless but the premise of finding 1 is version-specific.
+- **Preconditions:** installed state. 900 listed, 901 not listed.
+- **Step 0 (confirm the premise).** On this node, `qm showcmd 900 | tr ' ' '\n' | grep -x -- -id` must print `-id`. If it does not, record that qemu-server on this version does not emit `-id`. The fix is then harmless but the premise of finding 1 is version-specific.
 - **Steps:**
-  1. `qm start 9001; sleep 5; qm status 9001`
-  2. `pid=$(cat /var/run/qemu-server/9001.pid); readlink /proc/$pid/exe; tr '\0' ' ' < /proc/$pid/cmdline; echo`
+  1. `qm start 900; sleep 5; qm status 900`
+  2. `pid=$(cat /var/run/qemu-server/900.pid); readlink /proc/$pid/exe; tr '\0' ' ' < /proc/$pid/cmdline; echo`
   3. `tail -3 /var/log/qemu-ad-wrapper.log`
-  4. `qm start 9002; sleep 5; pid2=$(cat /var/run/qemu-server/9002.pid); readlink /proc/$pid2/exe; tr '\0' ' ' < /proc/$pid2/cmdline; echo`
+  4. `qm start 901; sleep 5; pid2=$(cat /var/run/qemu-server/901.pid); readlink /proc/$pid2/exe; tr '\0' ' ' < /proc/$pid2/cmdline; echo`
 - **Expected:**
-  - 9001: the exe is `/opt/qemu-ad/bin/qemu-system-x86_64`. The cmdline contains no `-id` token. The wrapper log has a `vmid=9001` line. `qm status` is running.
-  - 9002: the exe is the vendor binary (resolves to `/usr/bin/qemu-system-x86_64`). The cmdline **does** contain `-id 9002`. The wrapper log has no 9002 line.
+  - 900: the exe is `/opt/qemu-ad/bin/qemu-system-x86_64`. The cmdline contains no `-id` token. The wrapper log has a `vmid=900` line. `qm status` is running.
+  - 901: the exe is the vendor binary (resolves to `/usr/bin/qemu-system-x86_64`). The cmdline **does** contain `-id 901`. The wrapper log has no 901 line.
 - **Pass:** every bullet holds.
-- **Teardown:** `qm stop 9001; qm stop 9002`
+- **Teardown:** `qm stop 900; qm stop 901`
 
 ### P4. Non-listed pass-through (case 4)
 
-- **Preconditions:** installed state. 9002 not listed.
+- **Preconditions:** installed state. 901 not listed.
 - **Steps:**
-  1. Capture the vendor-view command line: `qm showcmd 9002 --pretty | sed 's/ \\$//' > /root/cmd.9002.vendor.txt`
-  2. `qm start 9002; sleep 5`
-  3. Capture the live argv: `tr '\0' '\n' < /proc/$(cat /var/run/qemu-server/9002.pid)/cmdline > /root/cmd.9002.live.txt`
-  4. Compare: `qm showcmd 9002 | tr ' ' '\n'` against the live argv. Allow for the shell quoting that `showcmd` adds. A stricter check is to run `strace -f -e execve -s 2000 -o /root/exec.9002.txt qm start 9002` and diff the execve argv of `/usr/bin/kvm` against that of the vendor binary.
-  5. Extra checks on odd args: add to 9002 `--args '-smbios type=1,product=x+pve1'` and a VM name with a space-free `+pve5` (for example `qad+pve5`). Start it and confirm those strings reach the live argv unchanged.
-  6. `qm shutdown 9002 --timeout 20 || qm stop 9002`
+  1. Capture the vendor-view command line: `qm showcmd 901 --pretty | sed 's/ \\$//' > $WORK/cmd.901.vendor.txt`
+  2. `qm start 901; sleep 5`
+  3. Capture the live argv: `tr '\0' '\n' < /proc/$(cat /var/run/qemu-server/901.pid)/cmdline > $WORK/cmd.901.live.txt`
+  4. Compare: `qm showcmd 901 | tr ' ' '\n'` against the live argv. Allow for the shell quoting that `showcmd` adds. A stricter check is to run `strace -f -e execve -s 2000 -o $WORK/exec.901.txt qm start 901` and diff the execve argv of `/usr/bin/kvm` against that of the vendor binary.
+  5. Extra checks on odd args: add to 901 `--args '-smbios type=1,product=x+pve1'` and a VM name with a space-free `+pve5` (for example `qad+pve5`). Start it and confirm those strings reach the live argv unchanged.
+  6. `qm shutdown 901 --timeout 20 || qm stop 901`
 - **Expected:** the live argv equals the vendor-view argv. `+pveN` appears unmodified wherever qemu-server put it. The exe is the vendor binary.
-- **Pass:** zero differences after normalizing quoting, and the strace execve argv for `/usr/bin/kvm` (the wrapper) equals the argv the vendor binary receives. A 9002 start must work with the list file removed and with an empty list file, as well as with the file present.
-- **Teardown:** `qm stop 9002; qm set 9002 --delete args; qm set 9002 --name qad-unlisted`
+- **Pass:** zero differences after normalizing quoting, and the strace execve argv for `/usr/bin/kvm` (the wrapper) equals the argv the vendor binary receives. A 901 start must work with the list file removed and with an empty list file, as well as with the file present.
+- **Teardown:** `qm stop 901; qm set 901 --delete args; qm set 901 --name qad-unlisted`
 
 ### P5. `--purge` guard (case 5)
 
 - **Preconditions:** installed state. Create the sentinel dirs `mkdir -p /opt/qad-sentinel /usr/local/qad-sentinel`.
 - **Steps:** run each of these and record rc and whether anything was removed. **Never use a real system path as `PREFIX` for an unguarded script.** Run this case only on a commit that has passed tier-1 C5, or shadow `rm` with a recorder:
   ```bash
-  mkdir -p /root/shim2 && printf '#!/bin/bash\necho "RM $*" >> /root/rm.log\n' > /root/shim2/rm && chmod +x /root/shim2/rm
-  for p in / /usr /etc /opt /opt/ /usr/local /srv /home/x relative/opt "" /opt/../usr /opt/qemu-ad/../.. /usr/local/bin /usr/local/../../etc; do
-    : > /root/rm.log
-    PATH=/root/shim2:$PATH PREFIX="$p" $ADP uninstall --purge; echo "PREFIX='$p' rc=$? rm=$(wc -l < /root/rm.log)"
+  mkdir -p $WORK/shim2 && printf '#!/bin/bash\necho "RM $*" >> $WORK/rm.log\n' > $WORK/shim2/rm && chmod +x $WORK/shim2/rm
+  for p in / /usr /etc /opt /opt/ /usr/local /srv /home/x relative/opt /opt/../usr /opt/qemu-ad/../.. /usr/local/bin /usr/local/../../etc; do
+    : > $WORK/rm.log
+    PATH=$WORK/shim2:$PATH PREFIX="$p" $ADP uninstall --purge; echo "PREFIX='$p' rc=$? rm=$(wc -l < $WORK/rm.log)"
   done
   ```
-  Then the allow cases, also with `rm` shadowed: `/opt/qemu-ad`, `/usr/local/qemu-ad`, `/srv/qad`. Finally one real purge: `PREFIX=/opt/qemu-ad $ADP uninstall --purge`.
+  An empty `PREFIX=""` is not a reject case: the script defaults it to `/opt/qemu-ad` (an allow case, run with `rm` shadowed). Then the allow cases, also with `rm` shadowed: `/opt/qemu-ad`, `/usr/local/qemu-ad`, `/srv/qad`. Finally one real purge: `PREFIX=/opt/qemu-ad $ADP uninstall --purge`.
 - **Expected:** every reject case has rc not 0 and 0 `rm` lines. Every allow case has rc 0 and one `rm -rf` line naming exactly that `PREFIX`. After the real purge, `/opt/qemu-ad` is gone and `/opt/qad-sentinel` is still there.
 - **Pass:** all of the above, including a refused purge leaving the divert and wrapper in place.
-- **Teardown:** `rm -rf /opt/qad-sentinel /usr/local/qad-sentinel /root/shim2`. The real purge removed `SIDE_BIN`, so the next case needs a reinstall (`$ADP install` rebuilds, so restore the snapshot or accept the rebuild time).
+- **Teardown:** `rm -rf /opt/qad-sentinel /usr/local/qad-sentinel $WORK/shim2`. The real purge removed `SIDE_BIN`, so the next case needs a reinstall (`$ADP install` rebuilds, so restore the snapshot or accept the rebuild time).
 
 ### P6. `+pveN` stripping only on `-machine` and `-M` (case 6)
 
-- **Preconditions:** installed state, 9003 listed.
+- **Preconditions:** installed state, 902 listed.
 - **Steps:**
-  1. `qm showcmd 9003 | tr ' ' '\n' | grep -n 'pve[0-9]'` to see whether qemu-server emitted a `+pveN` machine type.
-  2. `qm start 9003; sleep 5; tr '\0' '\n' < /proc/$(cat /var/run/qemu-server/9003.pid)/cmdline | grep -n 'pve[0-9]' || echo none`
-  3. Put a `+pve` string where it must survive and start 9001: `qm set 9001 --args '-smbios type=1,product=prod+pve7'`, `qm set 9001 --name qad+pve5`. Start it and read the live argv.
+  1. `qm showcmd 902 | tr ' ' '\n' | grep -n 'pve[0-9]'` to see whether qemu-server emitted a `+pveN` machine type.
+  2. `qm start 902; sleep 5; tr '\0' '\n' < /proc/$(cat /var/run/qemu-server/902.pid)/cmdline | grep -n 'pve[0-9]' || echo none`
+  3. Put a `+pve` string where it must survive and start 900: `qm set 900 --args '-smbios type=1,product=prod+pve7'`, `qm set 900 --name qad+pve5`. Start it and read the live argv.
 - **Expected:**
-  - 9003's live argv has no `+pveN` in the machine type (the guest boots, so QEMU accepted it).
-  - 9001's live argv still contains `product=prod+pve7` and the name `qad+pve5`.
+  - 902's live argv has no `+pveN` in the machine type (the guest boots, so QEMU accepted it).
+  - 900's live argv still contains `product=prod+pve7` and the name `qad+pve5`.
 - **Pass:** both bullets hold and both guests are running.
-- **Teardown:** `qm stop 9001 9003; qm set 9001 --delete args; qm set 9001 --name qad-listed`
+- **Teardown:** `qm stop 900 902; qm set 900 --delete args; qm set 900 --name qad-listed`
 
 ### P7. `pve-qemu-kvm` upgrade and reinstall (case 7)
 
@@ -236,7 +246,7 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
   1. **Reinstall:** `apt-get install --reinstall -y pve-qemu-kvm`
   2. Check: `sha256sum /usr/bin/kvm` (equals `W`), `dpkg-divert --list /usr/bin/kvm`, `ls -l /usr/bin/kvm.pve`, `readlink -f /usr/bin/kvm.pve`, `dpkg -S /usr/bin/kvm`, and `grep -c 'Generated by qemu-ad-pve' /usr/bin/kvm`.
   3. **Real version change** (only if two versions are available from the repo): `apt-cache policy pve-qemu-kvm`, then `apt-get install -y pve-qemu-kvm=<older>` followed by `apt-get install -y pve-qemu-kvm` (newest). Repeat the checks in step 2 after each.
-  4. Smoke after each package change: `qm start 9002` (unlisted, must start) and `qm start 9001` (listed). Record whether the listed guest still starts.
+  4. Smoke after each package change: `qm start 901` (unlisted, must start) and `qm start 900` (listed). Record whether the listed guest still starts.
   5. `dpkg --verify pve-qemu-kvm` and `dpkg --audit`.
 - **Expected:**
   - `/usr/bin/kvm` is still the wrapper with an identical hash.
@@ -245,19 +255,19 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
   - `dpkg --audit` is clean.
   - Unlisted guests start.
 - **Pass:** all expected items hold. A listed guest failing after a **version change** is an INFO finding, not a failure of the PR. It is the version-skew risk (the side binary stays at 10.2.2 while qemu-server follows the vendor version), tracked as finding 9.
-- **Teardown:** `qm stop 9001 9002`. Leave the newest package version installed.
+- **Teardown:** `qm stop 900 901`. Leave the newest package version installed.
 
 ### P8. Smoke: listed guest boots, non-listed guest boots
 
-- **Preconditions:** installed state, 9001 listed (machine `pc-q35-10.1`), 9002 not listed, the Alpine ISO attached.
+- **Preconditions:** installed state, 900 listed (machine `pc-q35-10.1`), 901 not listed, the Alpine ISO attached.
 - **Steps:**
-  1. `qm start 9001 && qm start 9002`
+  1. `qm start 900 && qm start 901`
   2. Wait 60 seconds. For each guest: `qm status <id>`, `echo '{"execute":"qmp_capabilities"}{"execute":"query-status"}' | socat - UNIX-CONNECT:/var/run/qemu-server/<id>.qmp`, and read the serial console log: `timeout 20 socat - UNIX-CONNECT:/var/run/qemu-server/<id>.serial0`. Look for the Alpine/SeaBIOS boot banner.
-  3. `qm shutdown 9001 --timeout 30; qm shutdown 9002 --timeout 30`, or `qm stop` if the shutdown times out (Alpine live ISO may ignore ACPI).
+  3. `qm shutdown 900 --timeout 30; qm shutdown 901 --timeout 30`, or `qm stop` if the shutdown times out (Alpine live ISO may ignore ACPI).
   4. Start both again to confirm restart works.
-- **Expected:** both report `running`, query-status returns `{"status":"running"}`, and the serial log shows firmware or boot output. 9001's exe is the side binary and 9002's exe is the vendor binary.
+- **Expected:** both report `running`, query-status returns `{"status":"running"}`, and the serial log shows firmware or boot output. 900's exe is the side binary and 901's exe is the vendor binary.
 - **Pass:** both guests boot twice, stop cleanly, and the exe check holds.
-- **Teardown:** `qm stop 9001 9002`
+- **Teardown:** `qm stop 900 901`
 
 ## 6. Ordered run plan
 
@@ -268,7 +278,7 @@ Common precondition for every case: S1-S4 done, the node is in the post-P0 state
 5. P1, P2 (they tear down and reinstall the divert).
 6. P7 upgrade and reinstall.
 7. P5 purge guard last (the real purge destroys the build).
-8. Collect `/root/kvm-watch.log`, `/root/install.log`, `/var/log/qemu-ad-wrapper.log` and the outputs above.
+8. Collect `$WORK/kvm-watch.log`, `$WORK/install.log`, `/var/log/qemu-ad-wrapper.log` and the outputs above.
 9. Final teardown, then outer-host rollback to `pre-qemu-ad`.
 
 Estimated time: about 1 to 1.5 hours including the build, plus a rebuild if P5's real purge runs before a later re-run.
@@ -276,10 +286,9 @@ Estimated time: about 1 to 1.5 hours including the build, plus a rebuild if P5's
 ## 7. Risks and safety
 
 - **Blast radius:** on the test node, a bug can leave `/usr/bin/kvm` missing, which stops every VM on that node. That is the reason for the throwaway node. The snapshot restores it.
-- **Production isolation:** no cluster join, no shared storage, no route to production, test VMIDs 9001-9003 only. The S2 gate aborts if a production VMID shows up in `qm list`, if the hostname is wrong, or if the node is clustered. Nothing here is run on the hosts that carry 110, 115, 200 or 245.
-- **Dangerous commands:** P5 is the only case that can delete a system path if a guard is broken. Shadow `rm` with a recorder (as shown) and run it only after tier-1 C5 passes.
+- **Production isolation:** no cluster join, no shared storage, no route to production, test VMIDs only (default 900-902). The S2 gate aborts if `qm list` fails, if any protected VMID (`QAD_PROTECTED_VMIDS`, required) or any VMID outside the test range shows up, if the hostname is wrong, or if the node is clustered. Nothing here is run on a host that carries guests you care about.
 - **Abort criteria:** stop the run and roll back if any of these happen:
-  - `/root/kvm-watch.log` shows MISSING in any case other than a deliberate injection.
+  - `$WORK/kvm-watch.log` shows MISSING in any case other than a deliberate injection.
   - `dpkg --audit` reports a broken package state.
   - The S2 gate fails.
   - Any command output mentions a production VMID or hostname.

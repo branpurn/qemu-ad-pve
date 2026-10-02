@@ -1,0 +1,31 @@
+#!/bin/bash
+# Stub `qm` for sandbox tests. NEVER touches a real hypervisor.
+# State lives in $STUB: conf (key: value lines), status (running|stopped), calls (log of every invocation).
+# Failure injection: FAIL_ON=comma list of: shutdown stop start1 startall snapshot setargs1 argsfrom2 setsmb1 setsmb2 del scbad
+# START_DELAY=<seconds> delays `start`.
+S=${STUB:?}; echo "qm $*" >> $S/calls
+cmd=$1; shift
+cnt(){ local f=$S/cnt.$1; local n=$(( $(cat $f 2>/dev/null || echo 0) + 1 )); echo $n > $f; echo $n; }
+failon(){ [[ ,${FAIL_ON:-}, == *,$1,* ]]; }
+case $cmd in
+ config) cat $S/conf;;
+ status) echo "status: $(cat $S/status)";;
+ shutdown) failon shutdown && { echo "timeout" >&2; exit 255; }; echo stopped > $S/status;;
+ stop) failon stop && exit 255; echo stopped > $S/status;;
+ start) [[ -n ${START_DELAY:-} ]] && sleep $START_DELAY; n=$(cnt start); failon start1 && (( n==1 )) && { echo "start failed" >&2; exit 255; }; failon startall && exit 255; echo running > $S/status;;
+ snapshot) failon snapshot && { echo "snap fail" >&2; exit 255; }; echo "$*" >> $S/snaps;;
+ set) shift
+   key=$1
+   if [[ $key == --args ]]; then n=$(cnt setargs); failon setargs1 && (( n==1 )) && { echo "set fail" >&2; exit 255; }; failon argsfrom2 && (( n>=2 )) && { echo "set fail" >&2; exit 255; }; fi
+   if [[ $key == --smbios1 ]]; then n=$(cnt setsmb); failon setsmb1 && (( n==1 )) && { echo "set fail" >&2; exit 255; }; failon setsmb2 && (( n==2 )) && { echo "set fail" >&2; exit 255; }; fi
+   if [[ $key == --delete ]]; then n=$(cnt del); failon del && { echo "del fail" >&2; exit 255; }; fi
+   while (( $# )); do case $1 in
+      --delete) sed -i "/^$2: /d" $S/conf; shift 2;;
+      --*) k=${1#--}; sed -i "/^$k: /d" $S/conf; echo "$k: $2" >> $S/conf; shift 2;;
+   esac; done;;
+ showcmd)
+   a=$(sed -n 's/^args: //p' $S/conf); sm=$(sed -n 's/^smbios1: //p' $S/conf)
+   vmid=${VMID_FOR_STUB:-<VMID>}
+   if failon scbad; then echo "/usr/bin/kvm -id $vmid -name <vmname> $a"; else
+   echo "/usr/bin/kvm -id $vmid -name <vmname> -smbios 'type=1,$sm' -device 'ahci,id=ahci0' -device 'ide-hd,bus=ahci0.0' $a"; fi;;
+esac

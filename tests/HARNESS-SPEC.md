@@ -108,7 +108,7 @@ qm create 902 --name qad-unversioned --memory 512 --cores 1 --machine q35 --cpu 
 |---|---|---|
 | 1 install atomicity | C1a-C1h | Injected write failure, `/dev/full` (ENOSPC), and a wrapper failing `bash -n` all leave `kvm` intact and create no divert. Reinstall is idempotent. |
 | 2 uninstall order | C2a-C2d | A failed divert removal restores the wrapper. A clean uninstall restores the vendor file. |
-| 3 `-id` | C3a-C3f | Listed guests go to side with the `-id` pair dropped. Unlisted guests go to vendor with `-id` intact. VMID 2000 does not match 200. The fake VMID `-1` probe goes to vendor. |
+| 3 `-id` | C3a-C3f | Listed guests go to side with the `-id` pair dropped. Unlisted guests go to vendor with `-id` intact. VMID 992000 does not match listed 99200 (and 9920 does not match either). The fake VMID `-1` probe goes to vendor. |
 | 4 pass-through | C4a-C4e | Non-listed argv is byte-identical (spaces, embedded newline, empty arg, `+pve` in a path). `--version` goes to vendor. A missing or CRLF list falls back to vendor. A missing side binary fails loudly for listed guests only. |
 | 5 purge guard | C5 | Rejects `/`, `/usr`, `/etc`, `/opt`, `/usr/local`, `/srv`, `/home/x`, relative paths, and traversal. Allows `/opt/qemu-ad`. A refused purge changes nothing. |
 | 6 `+pveN` | C6a-C6f | Stripped only after `-machine` and `-M`. Untouched in names, smbios strings and paths. |

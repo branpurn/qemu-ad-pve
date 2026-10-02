@@ -90,35 +90,35 @@ FAIL_REMOVE=1 L 'uninstall' >/dev/null 2>&1; rc=$?
 chk "C2d wrapper already missing + remove failure: no crash beyond rc!=0" '[[ $rc -ne 0 ]]'
 
 # wrapper under test
-mkw() { fresh; L 'write_wrapper "$WRAPPER_PATH"' >/dev/null; printf '200\n' > "$T/vms"; sed -i "s#^real=.*#real=$W/real#;s#^side=.*#side=$W/side#" "$T/kvm"; }
+mkw() { fresh; L 'write_wrapper "$WRAPPER_PATH"' >/dev/null; printf '99200\n' > "$T/vms"; sed -i "s#^real=.*#real=$W/real#;s#^side=.*#side=$W/side#" "$T/kvm"; }
 K() { "$T/kvm" "$@"; }
 mkw
 echo "== C3 -id handling"
-o=$(K -id 200 -name vm -pidfile /var/run/qemu-server/200.pid -daemonize)
-chk "C3a listed (pidfile): goes to SIDE, -id pair removed"  '[[ $o == "SIDE [-name] [vm] [-pidfile] [/var/run/qemu-server/200.pid] [-daemonize]" ]]'
-o=$(K -id 200 -chardev 'socket,id=qmp,path=/var/run/qemu-server/200.qmp,server=on,wait=off')
-chk "C3b listed (qmp chardev path only)"                    '[[ $o == "SIDE [-chardev] [socket,id=qmp,path=/var/run/qemu-server/200.qmp,server=on,wait=off]" ]]'
-o=$(K -id 201 -pidfile /var/run/qemu-server/201.pid)
-chk "C3c unlisted: REAL with -id intact"                    '[[ $o == "REAL [-id] [201] [-pidfile] [/var/run/qemu-server/201.pid]" ]]'
-o=$(K -pidfile /var/run/qemu-server/2000.pid)
-chk "C3d VMID 2000 must not match listed 200"               '[[ $o == REAL* ]]'
+o=$(K -id 99200 -name vm -pidfile /var/run/qemu-server/99200.pid -daemonize)
+chk "C3a listed (pidfile): goes to SIDE, -id pair removed"  '[[ $o == "SIDE [-name] [vm] [-pidfile] [/var/run/qemu-server/99200.pid] [-daemonize]" ]]'
+o=$(K -id 99200 -chardev 'socket,id=qmp,path=/var/run/qemu-server/99200.qmp,server=on,wait=off')
+chk "C3b listed (qmp chardev path only)"                    '[[ $o == "SIDE [-chardev] [socket,id=qmp,path=/var/run/qemu-server/99200.qmp,server=on,wait=off]" ]]'
+o=$(K -id 99201 -pidfile /var/run/qemu-server/99201.pid)
+chk "C3c unlisted: REAL with -id intact"                    '[[ $o == "REAL [-id] [99201] [-pidfile] [/var/run/qemu-server/99201.pid]" ]]'
+o=$(K -pidfile /var/run/qemu-server/992000.pid)
+chk "C3d VMID 992000 must not match listed 99200"               '[[ $o == REAL* ]]'
 o=$(K -chardev 'socket,id=qmp,path=/var/run/qemu-server/-1.qmp,server=on' -pidfile /var/run/qemu-server/-1.pid)
 chk "C3e qemu-server probe launch (fake vmid -1) -> REAL"   '[[ $o == REAL* ]]'
-o=$(K -pidfile /var/run/qemu-server/200.pid -name -id -x)
+o=$(K -pidfile /var/run/qemu-server/99200.pid -name -id -x)
 note "C3f arg literally named -id as a VALUE is dropped on side path: $o"
 
 echo "== C4 non-listed pass-through"
-args=(-id 201 -name 'a b' -machine 'type=pc-q35-10.1+pve1,accel=kvm' -smbios $'type=1,product=x\ny' '' -drive 'file=/m/a+pve1/d' -pidfile /var/run/qemu-server/201.pid)
+args=(-id 99201 -name 'a b' -machine 'type=pc-q35-10.1+pve1,accel=kvm' -smbios $'type=1,product=x\ny' '' -drive 'file=/m/a+pve1/d' -pidfile /var/run/qemu-server/99201.pid)
 exp=$("$W/real" "${args[@]}"; echo x); got=$(K "${args[@]}"; echo x)
 chk "C4a argv byte-identical to vendor (spaces, newline, empty, +pve)" '[[ "$got" == "$exp" ]]'
 chk "C4b --version and -h routed to vendor"                 '[[ $(K --version) == "REAL [--version]" ]]'
-rm -f "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
+rm -f "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid)
 chk "C4c no list file: everything to vendor"                '[[ $o == REAL* ]]'
-printf '200\r\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
-chk "C4d CRLF list entry '200\\r' now matches (N3: routes to side)" '[[ $o == SIDE* ]]'
-printf '200\n' > "$T/vms"; command rm -f "$W/side.bak"; mv "$W/side" "$W/side.bak"
-K -pidfile /var/run/qemu-server/200.pid >/dev/null 2>&1; rc=$?; mv "$W/side.bak" "$W/side"
-chk "C4e listed + missing side binary: loud failure (rc!=0), unlisted unaffected" '[[ $rc -ne 0 && $(K -pidfile /var/run/qemu-server/201.pid) == REAL* ]]'
+printf '99200\r\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid)
+chk "C4d CRLF list entry '99200\\r' now matches (N3: routes to side)" '[[ $o == SIDE* ]]'
+printf '99200\n' > "$T/vms"; command rm -f "$W/side.bak"; mv "$W/side" "$W/side.bak"
+K -pidfile /var/run/qemu-server/99200.pid >/dev/null 2>&1; rc=$?; mv "$W/side.bak" "$W/side"
+chk "C4e listed + missing side binary: loud failure (rc!=0), unlisted unaffected" '[[ $rc -ne 0 && $(K -pidfile /var/run/qemu-server/99201.pid) == REAL* ]]'
 
 echo "== C5 --purge guard (rm is a no-op recorder)"
 purge() { fresh; PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ echo \"RM \$*\" >> '$T/rm.log'; }
@@ -138,7 +138,7 @@ fresh; PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm()
 chk "C5 empty PREFIX= is rejected before any rm (artifact fixed: runs through the same guard, rm recorder empty)" '[[ ! -s $T/rm.log || $(grep -c "^RM" $T/rm.log) -eq 0 ]]'
 
 echo "== C6 +pveN strip only on -machine/-M"
-mkw; printf '200\n' > "$T/vms"; P='-pidfile /var/run/qemu-server/200.pid'
+mkw; printf '99200\n' > "$T/vms"; P='-pidfile /var/run/qemu-server/99200.pid'
 o=$(K -machine 'type=pc-q35-10.1+pve1,accel=kvm' $P); chk "C6a -machine type=...+pve1 stripped" '[[ $o == *"[type=pc-q35-10.1,accel=kvm]"* ]]'
 o=$(K -machine pc-q35-10.1+pve12 $P);               chk "C6b -machine bare +pve12 stripped"       '[[ $o == *"[pc-q35-10.1]"* ]]'
 o=$(K -M pc-q35-10.1+pve2 $P);                      chk "C6c -M stripped"                          '[[ $o == *"[pc-q35-10.1]"* ]]'
@@ -150,7 +150,7 @@ o=$(K -name -machine pc-q35-10.1+pve1 $P);          note "C6f edge: '-name -mach
 echo "== C7 (simulated) vendor upgrade"
 fresh; L 'install_wrapper' >/dev/null 2>&1; printf 'vendor-NEW\n' > "$T/kvm.pve"   # what dpkg does: new vendor lands on kvm.pve
 grep -q "Generated by qemu-ad-pve" "$T/kvm" && ok "C7a wrapper untouched by new vendor file" || bad "C7a"
-sed -i "s#^real=.*#real=$W/real#" "$T/kvm"; printf '200\n' > "$T/vms"; o=$("$T/kvm" -pidfile /var/run/qemu-server/201.pid)
+sed -i "s#^real=.*#real=$W/real#" "$T/kvm"; printf '99200\n' > "$T/vms"; o=$("$T/kvm" -pidfile /var/run/qemu-server/99201.pid)
 chk "C7b unlisted still routed to vendor path" '[[ $o == REAL* ]]'
 note "C7 real dpkg upgrade behaviour needs tier 2"
 
@@ -243,20 +243,20 @@ o=$(PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; SIDE_BI
 chk "C8m no skew: silent" '[[ -z $o ]]'
 
 # --- finding 11: del-vm
-fresh; printf '200\n201\n202\n' > "$T/vms"; chmod 640 "$T/vms"
-L 'del_vm 201' >/dev/null 2>&1; rc=$?
-chk "C8n del-vm removes only that id" '[[ $rc -eq 0 ]] && [[ $(cat $T/vms | tr "\n" " ") == "200 202 " ]]'
+fresh; printf '99200\n99201\n99202\n' > "$T/vms"; chmod 640 "$T/vms"
+L 'del_vm 99201' >/dev/null 2>&1; rc=$?
+chk "C8n del-vm removes only that id" '[[ $rc -eq 0 ]] && [[ $(cat $T/vms | tr "\n" " ") == "99200 99202 " ]]'
 chk "C8o del-vm preserves mode" '[[ $(stat -c %a $T/vms) == 640 ]]'
 chk "C8p del-vm leaves no temp files next to the list" '[[ $(ls $T | grep -c "^vms\.") -eq 0 ]]'
-fresh; printf '200\n' > "$T/vms"; L 'del_vm 200' >/dev/null 2>&1; rc=$?
+fresh; printf '99200\n' > "$T/vms"; L 'del_vm 99200' >/dev/null 2>&1; rc=$?
 chk "C8q del-vm of the last id: ok, empty list (grep exit 1 tolerated)" '[[ $rc -eq 0 && ! -s $T/vms ]]'
-fresh; printf '200\n' > "$T/vms"
+fresh; printf '99200\n' > "$T/vms"
 cat > "$W/stub/grep" <<'S'
 #!/bin/bash
 [[ $1 == -vx* ]] && exit 2; exec /bin/grep "$@"
 S
-chmod +x "$W/stub/grep"; L 'del_vm 200' >/dev/null 2>&1; rc=$?
-chk "C8r grep hard error: fatal, list unchanged, no temp left" '[[ $rc -ne 0 && $(cat $T/vms) == 200 && $(ls $T | grep -c "^vms\.") -eq 0 ]]'
+chmod +x "$W/stub/grep"; L 'del_vm 99200' >/dev/null 2>&1; rc=$?
+chk "C8r grep hard error: fatal, list unchanged, no temp left" '[[ $rc -ne 0 && $(cat $T/vms) == 99200 && $(ls $T | grep -c "^vms\.") -eq 0 ]]'
 command rm -f "$W/stub/grep"
 
 # --- finding 13: leading-zero VMIDs, quoted wrapper paths
@@ -264,18 +264,18 @@ fresh; L 'add_vm 0200' >/dev/null 2>&1; rc=$?
 chk "C8s add-vm rejects leading-zero VMID" '[[ $rc -ne 0 ]] && ! grep -qx 0200 "$T/vms" 2>/dev/null'
 fresh; L 'del_vm 0200' >/dev/null 2>&1; rc=$?   # list absent -> must still fail
 chk "C8t del-vm rejects leading-zero VMID" '[[ $rc -ne 0 ]]'
-fresh; L 'add_vm 200' >/dev/null 2>&1; rc=$?
-chk "C8u add-vm 200 still works" '[[ $rc -eq 0 ]] && grep -qx 200 "$T/vms"'
+fresh; L 'add_vm 99200' >/dev/null 2>&1; rc=$?
+chk "C8u add-vm 99200 still works" '[[ $rc -eq 0 ]] && grep -qx 99200 "$T/vms"'
 # wrapper with a space and $ in paths must still be valid and route correctly
 fresh; mkdir -p "$T/we ird"; cp "$W/real" "$T/we ird/re al"; cp "$W/side" "$T/we ird/si de"
 PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; VENDOR_PATH='$T/we ird/re al' SIDE_BIN='$T/we ird/si de' LIST_FILE='$T/we ird/vm s' LOG_FILE='$T/we ird/log'; write_wrapper '$T/wr'" >/dev/null 2>&1
-printf '200\n' > "$T/we ird/vm s"
+printf '99200\n' > "$T/we ird/vm s"
 chk "C8v wrapper with spaces in paths passes bash -n" 'bash -n "$T/wr"'
-o=$(bash "$T/wr" -pidfile /var/run/qemu-server/200.pid); chk "C8w spaced paths: listed id -> side" '[[ $o == SIDE* ]]'
-o=$(bash "$T/wr" -pidfile /var/run/qemu-server/201.pid); chk "C8x spaced paths: unlisted id -> vendor" '[[ $o == REAL* ]]'
+o=$(bash "$T/wr" -pidfile /var/run/qemu-server/99200.pid); chk "C8w spaced paths: listed id -> side" '[[ $o == SIDE* ]]'
+o=$(bash "$T/wr" -pidfile /var/run/qemu-server/99201.pid); chk "C8x spaced paths: unlisted id -> vendor" '[[ $o == REAL* ]]'
 fresh; mkdir -p "$T/d"; cp "$W/side" "$T/d/"'s$(touch PWNED)'
 PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; VENDOR_PATH='$W/real' SIDE_BIN='$T/d/s\$(touch PWNED)' LIST_FILE='$T/vms' LOG_FILE='$T/log'; write_wrapper '$T/wr2'" >/dev/null 2>&1
-printf '200\n' > "$T/vms"; ( cd "$T" && bash "$T/wr2" -pidfile /var/run/qemu-server/200.pid >"$T/wr2.out" 2>&1 )
+printf '99200\n' > "$T/vms"; ( cd "$T" && bash "$T/wr2" -pidfile /var/run/qemu-server/99200.pid >"$T/wr2.out" 2>&1 )
 chk "C8y metacharacters in SIDE_BIN are not executed; wrapper still reaches the side binary" '[[ ! -e $T/PWNED && $(cat $T/wr2.out) == SIDE* ]]'
 
 
@@ -338,35 +338,35 @@ else HAVEC=0; fi
 if [[ $HAVEC -eq 1 ]]; then
   fresh; cp "$W/prog" "$T/real"; cp "$W/prog" "$T/side"
   PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; WRAPPER_PATH='/usr/bin/kvm' VENDOR_PATH='$T/real' SIDE_BIN='$T/side' LIST_FILE='$T/vms' LOG_FILE='$T/log'; write_wrapper '$T/wr'" >/dev/null 2>&1
-  printf '200\n' > "$T/vms"
-  o=$(bash "$T/wr" -pidfile /var/run/qemu-server/201.pid -x); chk "C9d UNLISTED guest: argv[0] is /usr/bin/kvm (qemu-server parse_cmdline needs kvm\$; QEMU needs it for default KVM accel)" '[[ $o == *"ARGV0=/usr/bin/kvm"* ]]'
+  printf '99200\n' > "$T/vms"
+  o=$(bash "$T/wr" -pidfile /var/run/qemu-server/99201.pid -x); chk "C9d UNLISTED guest: argv[0] is /usr/bin/kvm (qemu-server parse_cmdline needs kvm\$; QEMU needs it for default KVM accel)" '[[ $o == *"ARGV0=/usr/bin/kvm"* ]]'
   chk "C9d unlisted: argv after argv[0] untouched" '[[ $o == *"ARG=-pidfile"* && $o == *"ARG=-x"* ]]'
-  o=$(bash "$T/wr" -id 200 -pidfile /var/run/qemu-server/200.pid); chk "C9e LISTED guest: argv[0] is /usr/bin/kvm and -id dropped" '[[ $o == *"ARGV0=/usr/bin/kvm"* && $o != *"ARG=-id"* && $o != *"ARG=200"* ]]'
-  bash "$T/wr" -pidfile /var/run/qemu-server/201.pid --exit7 >/dev/null; rc=$?; chk "C9f exit code propagates (unlisted, 7)" '[[ $rc -eq 7 ]]'
-  bash "$T/wr" -pidfile /var/run/qemu-server/200.pid --exit7 >/dev/null; rc=$?; chk "C9f exit code propagates (listed, 7)" '[[ $rc -eq 7 ]]'
-  o=$(printf 'hello\nworld\n' | bash "$T/wr" -pidfile /var/run/qemu-server/201.pid --cat); chk "C9g stdin passes through (unlisted)" '[[ $o == $'"'"'hello\nworld'"'"' ]]'
-  o=$(printf 'a\n' | bash "$T/wr" -pidfile /var/run/qemu-server/200.pid --cat); chk "C9g stdin passes through (listed)" '[[ $o == a ]]'
-  bash "$T/wr" -pidfile /var/run/qemu-server/201.pid --sleep > "$T/sig.out" & bp=$!; sleep 1
+  o=$(bash "$T/wr" -id 99200 -pidfile /var/run/qemu-server/99200.pid); chk "C9e LISTED guest: argv[0] is /usr/bin/kvm and -id dropped" '[[ $o == *"ARGV0=/usr/bin/kvm"* && $o != *"ARG=-id"* && $o != *"ARG=99200"* ]]'
+  bash "$T/wr" -pidfile /var/run/qemu-server/99201.pid --exit7 >/dev/null; rc=$?; chk "C9f exit code propagates (unlisted, 7)" '[[ $rc -eq 7 ]]'
+  bash "$T/wr" -pidfile /var/run/qemu-server/99200.pid --exit7 >/dev/null; rc=$?; chk "C9f exit code propagates (listed, 7)" '[[ $rc -eq 7 ]]'
+  o=$(printf 'hello\nworld\n' | bash "$T/wr" -pidfile /var/run/qemu-server/99201.pid --cat); chk "C9g stdin passes through (unlisted)" '[[ $o == $'"'"'hello\nworld'"'"' ]]'
+  o=$(printf 'a\n' | bash "$T/wr" -pidfile /var/run/qemu-server/99200.pid --cat); chk "C9g stdin passes through (listed)" '[[ $o == a ]]'
+  bash "$T/wr" -pidfile /var/run/qemu-server/99201.pid --sleep > "$T/sig.out" & bp=$!; sleep 1
   rp=$(sed -n 's/^pid=//p' "$T/sig.out"); chk "C9h wrapper EXECs the target (same pid, so signals/pidfile semantics are unchanged)" '[[ -n $rp && $rp == $bp ]]'
   kill -TERM "$bp" 2>/dev/null; wait "$bp" 2>/dev/null; rc=$?; chk "C9h SIGTERM reaches the target (rc 143)" '[[ $rc -eq 143 ]]'
 else note "C9d-h skipped: no C compiler"; fi
 
 # --- 3. list file format (documented): only a bare VMID on its own line matches
 fresh; mkw
-printf '# comment\n\n200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9i bare VMID among comment/blank lines still routes to side" '[[ $o == SIDE* ]]'
-printf '# 200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9i '# 200' (commented out) does not match -> vendor" '[[ $o == REAL* ]]'
+printf '# comment\n\n99200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid); chk "C9i bare VMID among comment/blank lines still routes to side" '[[ $o == SIDE* ]]'
+printf '# 99200\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid); chk "C9i '# 99200' (commented out) does not match -> vendor" '[[ $o == REAL* ]]'
 # N3: whitespace and CR around the VMID are tolerated (they used to fall back to vendor and were INFO)
-for pair in '200 |trailing space' ' 200|leading space' ' 200 |leading+trailing space' '200\r|CR (CRLF line ending)' '200 \r|space then CR' '\t200\t|tabs'; do
+for pair in '99200 |trailing space' ' 99200|leading space' ' 99200 |leading+trailing space' '99200\r|CR (CRLF line ending)' '99200 \r|space then CR' '\t99200\t|tabs'; do
   content=${pair%%|*}; label=${pair#*|}
-  printf "$content\n" > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
+  printf "$content\n" > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid)
   chk "C9j N3 list line with $label routes to SIDE" '[[ $o == SIDE* ]]'
 done
-printf '200\r\n201\r\n' > "$T/vms"
-chk "C9j N3 CRLF file: 200 -> SIDE, 201 -> SIDE, 20 and 2000 -> REAL (no prefix/suffix match)" '[[ $(K -pidfile /var/run/qemu-server/200.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/201.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/20.pid) == REAL* && $(K -pidfile /var/run/qemu-server/2000.pid) == REAL* ]]'
-printf '200' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid); chk "C9j N3 last line without newline matches" '[[ $o == SIDE* ]]'
-printf '200 # note\n2000\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid)
+printf '99200\r\n99201\r\n' > "$T/vms"
+chk "C9j N3 CRLF file: 99200 -> SIDE, 99201 -> SIDE, 9920 and 992000 -> REAL (no prefix/suffix match)" '[[ $(K -pidfile /var/run/qemu-server/99200.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/99201.pid) == SIDE* && $(K -pidfile /var/run/qemu-server/9920.pid) == REAL* && $(K -pidfile /var/run/qemu-server/992000.pid) == REAL* ]]'
+printf '99200' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid); chk "C9j N3 last line without newline matches" '[[ $o == SIDE* ]]'
+printf '99200 # note\n992000\n' > "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid)
 chk "C9j trailing comment text still does NOT match (documented: bare VMID only) -> vendor, never a crash" '[[ $o == REAL* ]]'
-if [[ $(id -u) -ne 0 ]]; then printf '200\n' > "$T/vms"; chmod 000 "$T/vms"; o=$(K -pidfile /var/run/qemu-server/200.pid 2>/dev/null); rc=$?; chmod 644 "$T/vms"
+if [[ $(id -u) -ne 0 ]]; then printf '99200\n' > "$T/vms"; chmod 000 "$T/vms"; o=$(K -pidfile /var/run/qemu-server/99200.pid 2>/dev/null); rc=$?; chmod 644 "$T/vms"
   chk "C9k unreadable list file: no crash, falls back to vendor" '[[ $rc -eq 0 && $o == REAL* ]]'
 else note "C9k skipped: running as root, chmod 000 does not make the list unreadable"; fi
 
@@ -374,15 +374,15 @@ else note "C9k skipped: running as root, chmod 000 does not make the list unread
 fresh; cat > "$W/stub/qm" <<'S'
 #!/bin/bash
 [[ $1 == showcmd ]] || exit 0
-printf '/usr/bin/kvm \\\n  -id 200 \\\n  -name "my vm+pve5" \\\n  -pidfile /var/run/qemu-server/200.pid \\\n  -machine '"'"'hpet=off,type=pc-q35-10.1+pve0'"'"'\n'
+printf '/usr/bin/kvm \\\n  -id 99200 \\\n  -name "my vm+pve5" \\\n  -pidfile /var/run/qemu-server/99200.pid \\\n  -machine '"'"'hpet=off,type=pc-q35-10.1+pve0'"'"'\n'
 S
 chmod +x "$W/stub/qm"
-o=$(L 'printf "200\n" > "$LIST_FILE"; showcmd 200' 2>&1)
+o=$(L 'printf "99200\n" > "$LIST_FILE"; showcmd 99200' 2>&1)
 last=$(tail -1 <<<"$o")
 chk "C9l showcmd (listed): side line has no -id" '[[ $last != *" -id "* ]]'
 chk "C9l showcmd: +pve stripped inside -machine only; name keeps +pve5" '[[ $last == *"type=pc-q35-10.1"* && $last != *"pve0"* && $last == *"+pve5"* ]]'
 chk "C9l showcmd: side line starts with the side binary" '[[ $last == "$W/side "* ]]'
-o=$(L 'showcmd 201' 2>&1); chk "C9m showcmd (unlisted): states it runs on the vendor binary unchanged" '[[ $o == *"NOT listed"* ]]'
+o=$(L 'showcmd 99201' 2>&1); chk "C9m showcmd (unlisted): states it runs on the vendor binary unchanged" '[[ $o == *"NOT listed"* ]]'
 command rm -f "$W/stub/qm"
 
 # --- 5. pre-flight checks
@@ -453,55 +453,55 @@ else note "C10 directory-refusal case skipped: cannot mount a tmpfs over /etc in
 for v in 0 00 007 0200; do fresh; L "add_vm $v" >/dev/null 2>&1; rc=$?; chk "C11 add-vm rejects '$v'" '[[ $rc -ne 0 ]] && ! grep -qx "$v" "$T/vms" 2>/dev/null'; done
 
 # --- 11. N3: one list-matching helper, used by wrapper, add-vm, del-vm, showcmd
-fresh; printf '200\r\n' > "$T/vms"; L 'add_vm 200' >/dev/null 2>&1; rc=$?
+fresh; printf '99200\r\n' > "$T/vms"; L 'add_vm 99200' >/dev/null 2>&1; rc=$?
 chk "N3 add-vm on a CRLF list does not append a duplicate" '[[ $rc -eq 0 && $(wc -l < "$T/vms") -eq 1 ]]'
-for c in '200 ' ' 200' '\t200 \r'; do
-  fresh; printf "$c\n" > "$T/vms"; L 'add_vm 200' >/dev/null 2>&1
+for c in '99200 ' ' 99200' '\t99200 \r'; do
+  fresh; printf "$c\n" > "$T/vms"; L 'add_vm 99200' >/dev/null 2>&1
   chk "N3 add-vm: no duplicate for line '$c'" '[[ $(wc -l < "$T/vms") -eq 1 ]]'
 done
-fresh; printf '200\r\n201\r\n202\r\n' > "$T/vms"; L 'del_vm 201' >/dev/null 2>&1; rc=$?
-chk "N3 del-vm removes the CRLF line for 201 and keeps the others byte-exact" '[[ $rc -eq 0 && $(od -An -c "$T/vms" | tr -d " \n") == "200\r\n202\r\n" ]]'
-for c in '201 ' ' 201' '\t201\t'; do
-  fresh; printf "200\n$c\n202\n" > "$T/vms"; L 'del_vm 201' >/dev/null 2>&1
-  chk "N3 del-vm removes padded line '$c'" '[[ $(tr "\n" " " < "$T/vms") == "200 202 " ]]'
+fresh; printf '99200\r\n99201\r\n99202\r\n' > "$T/vms"; L 'del_vm 99201' >/dev/null 2>&1; rc=$?
+chk "N3 del-vm removes the CRLF line for 99201 and keeps the others byte-exact" '[[ $rc -eq 0 && $(od -An -c "$T/vms" | tr -d " \n") == "99200\r\n99202\r\n" ]]'
+for c in '99201 ' ' 99201' '\t99201\t'; do
+  fresh; printf "99200\n$c\n99202\n" > "$T/vms"; L 'del_vm 99201' >/dev/null 2>&1
+  chk "N3 del-vm removes padded line '$c'" '[[ $(tr "\n" " " < "$T/vms") == "99200 99202 " ]]'
 done
-fresh; printf '2000\r\n20\r\n' > "$T/vms"; L 'del_vm 200' >/dev/null 2>&1
-chk "N3 del-vm 200 does not touch 2000 / 20" '[[ $(tr -d "\r" < "$T/vms" | tr "\n" " ") == "2000 20 " ]]'
-fresh; printf '200' > "$T/vms"; L 'add_vm 201' >/dev/null 2>&1
-chk "N3 add-vm onto a list whose last line has no newline keeps both ids on their own lines" '[[ $(tr "\n" " " < "$T/vms") == "200 201 " ]]'
+fresh; printf '992000\r\n9920\r\n' > "$T/vms"; L 'del_vm 99200' >/dev/null 2>&1
+chk "N3 del-vm 99200 does not touch 992000 / 9920" '[[ $(tr -d "\r" < "$T/vms" | tr "\n" " ") == "992000 9920 " ]]'
+fresh; printf '99200' > "$T/vms"; L 'add_vm 99201' >/dev/null 2>&1
+chk "N3 add-vm onto a list whose last line has no newline keeps both ids on their own lines" '[[ $(tr "\n" " " < "$T/vms") == "99200 99201 " ]]'
 fresh; cat > "$W/stub/qm" <<'S'
 #!/bin/bash
 [[ $1 == showcmd ]] || exit 0
-printf '/usr/bin/kvm \\\n  -id 200 \\\n  -pidfile /var/run/qemu-server/200.pid\n'
+printf '/usr/bin/kvm \\\n  -id 99200 \\\n  -pidfile /var/run/qemu-server/99200.pid\n'
 S
 chmod +x "$W/stub/qm"
-o=$(L 'printf "200\r\n" > "$LIST_FILE"; showcmd 200' 2>&1)
+o=$(L 'printf "99200\r\n" > "$LIST_FILE"; showcmd 99200' 2>&1)
 chk "N3 showcmd treats a CRLF list line as listed" '[[ $o == *"IS listed"* ]]'
-o=$(L 'printf " 200 \n" > "$LIST_FILE"; showcmd 200' 2>&1)
+o=$(L 'printf " 99200 \n" > "$LIST_FILE"; showcmd 99200' 2>&1)
 chk "N3 showcmd treats a padded list line as listed" '[[ $o == *"IS listed"* ]]'
 command rm -f "$W/stub/qm"
 fresh; L 'write_wrapper "$WRAPPER_PATH"' >/dev/null
 chk "N3 wrapper embeds the shared list-matching helper (no private grep -qx)" 'grep -q "^qad_list_has" "$T/kvm" && ! grep -q "grep -qx \"" "$T/kvm"'
 
 # --- 12. N4: missing / unwritable log dir must not write anything to stderr and must not change routing/rc
-mkw; printf '200\n' > "$T/vms"; sed -i "s#^log=.*#log=$T/nodir/sub/log#" "$T/kvm"
-o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e1"); rc=$?
+mkw; printf '99200\n' > "$T/vms"; sed -i "s#^log=.*#log=$T/nodir/sub/log#" "$T/kvm"
+o=$(K -pidfile /var/run/qemu-server/99200.pid 2>"$T/e1"); rc=$?
 chk "N4 listed VM, log dir missing: stdout from side, rc 0" '[[ $o == SIDE* && $rc -eq 0 ]]'
 chk "N4 listed VM, log dir missing: stderr is EMPTY" '[[ ! -s $T/e1 ]]'
-o=$(K -pidfile /var/run/qemu-server/201.pid 2>"$T/e2"); chk "N4 unlisted VM: stderr empty, vendor" '[[ $o == REAL* && ! -s $T/e2 ]]'
+o=$(K -pidfile /var/run/qemu-server/99201.pid 2>"$T/e2"); chk "N4 unlisted VM: stderr empty, vendor" '[[ $o == REAL* && ! -s $T/e2 ]]'
 mkdir -p "$T/ro"; chmod 555 "$T/ro"; sed -i "s#^log=.*#log=$T/ro/log#" "$T/kvm"
 if [[ $(id -u) -ne 0 ]]; then
-  o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e3"); rc=$?
+  o=$(K -pidfile /var/run/qemu-server/99200.pid 2>"$T/e3"); rc=$?
   chk "N4 log dir not writable: still silent, still starts on side" '[[ $o == SIDE* && $rc -eq 0 && ! -s $T/e3 ]]'
 fi
 mkdir -p "$T/logdir"; sed -i "s#^log=.*#log=$T/logdir#" "$T/kvm"
-o=$(K -pidfile /var/run/qemu-server/200.pid 2>"$T/e4"); rc=$?
+o=$(K -pidfile /var/run/qemu-server/99200.pid 2>"$T/e4"); rc=$?
 chk "N4 log path is a directory: silent, still starts" '[[ $o == SIDE* && $rc -eq 0 && ! -s $T/e4 ]]'
 mkdir -p "$T/okdir"; sed -i "s#^log=.*#log=$T/okdir/log#" "$T/kvm"
-K -pidfile /var/run/qemu-server/200.pid >/dev/null 2>&1
-chk "N4 control: with a writable log dir the line IS logged" 'grep -q "vmid=200 exec" "$T/okdir/log"'
+K -pidfile /var/run/qemu-server/99200.pid >/dev/null 2>&1
+chk "N4 control: with a writable log dir the line IS logged" 'grep -q "vmid=99200 exec" "$T/okdir/log"'
 # the wrapper must not fail even under bash -e/-u (qm may run it that way via a different shell option set)
-o=$(bash -eu "$T/kvm" -pidfile /var/run/qemu-server/200.pid 2>&1); chk "N4 wrapper run under bash -eu with a good log is fine" '[[ $o == SIDE* ]]'
+o=$(bash -eu "$T/kvm" -pidfile /var/run/qemu-server/99200.pid 2>&1); chk "N4 wrapper run under bash -eu with a good log is fine" '[[ $o == SIDE* ]]'
 
 # --- 13. N5: recovery hint when pve-qemu-kvm was removed while the divert exists
 fresh; L 'install_wrapper' >/dev/null 2>&1; command rm -f "$T/kvm.pve"   # what `apt remove pve-qemu-kvm` does
@@ -622,42 +622,42 @@ sk() { # sk <vmid> <list-content> <qm-showcmd-body...>; prints showcmd output (s
   { printf '#!/bin/bash\n[[ $1 == showcmd ]] || exit 0\ncat <<"EOQ"\n'; printf '%s\n' "$@"; printf 'EOQ\n'; } > "$W/stub/qm"; chmod +x "$W/stub/qm"
   L "QEMU_VER=10.2.2; SIDE_BIN='$W/side102'; showcmd $id" 2>&1; }
 printf '#!/bin/bash\necho "QEMU emulator version 10.2.2"\n' > "$W/side102"; chmod +x "$W/side102"
-base=('/usr/bin/kvm \' '  -id 200 \' '  -pidfile /var/run/qemu-server/200.pid \')
-o=$(sk 200 '200\n' "${base[@]}" '  -name vm' ); chk "C16a clean listed guest: no skew WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -spice tls-port=61000,addr=localhost' ); chk "C16b listed + -spice: WARNING mentioning spice" '[[ $o == *WARNING*[Ss]pice* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-11.0+pve0,accel=kvm' ); chk "C16c listed + pc-q35-11.0 (side 10.2.2): WARNING mentioning the machine" '[[ $o == *WARNING*pc-q35-11.0* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-i440fx-10.3,accel=kvm' ); chk "C16d listed + pc-i440fx-10.3 (newer minor): WARNING" '[[ $o == *WARNING*pc-i440fx-10.3* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-10.1+pve0,accel=kvm' ); chk "C16e listed + pc-q35-10.1 (older): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-10.2,accel=kvm' ); chk "C16e2 listed + pc-q35-10.2 (same as side): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -machine type=pc-q35-9.2+pve1' ); chk "C16e3 listed + pc-q35-9.2 (older major): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -loadstate /dev/pve/vm-200-state-s1' ); chk "C16f listed + -loadstate: WARNING mentioning loadstate" '[[ $o == *WARNING*loadstate* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -drive file=rbd:pool/vm-200-disk-0:conf=/etc/ceph/ceph.conf,if=none,id=drive-scsi0' ); chk "C16g listed + rbd: drive: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -drive file=pbs:repo=x,if=none,id=d0' ); chk "C16h listed + pbs: drive: WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
-o=$(sk 201 '200\n' '/usr/bin/kvm \' '  -id 201 \' '  -pidfile /var/run/qemu-server/201.pid \' '  -spice x -loadstate y -machine pc-q35-11.0' ); chk "C16i UNLISTED guest with all skew options: no WARNING (it runs on the vendor binary)" '[[ $o != *WARNING* && $o == *"NOT listed"* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -name spice-lab \' '  -smbios type=1,product=pc-q35-11.0-x,serial=rbd:y' ); chk "C16j option values that merely contain the words are not flagged (-name spice-lab, smbios text)" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -spice a \' '  -loadstate b' ); chk "C16k several problems: one WARNING per problem" '[[ $(grep -c "^WARNING" <<<"$o") -ge 2 ]]'
+base=('/usr/bin/kvm \' '  -id 99200 \' '  -pidfile /var/run/qemu-server/99200.pid \')
+o=$(sk 99200 '99200\n' "${base[@]}" '  -name vm' ); chk "C16a clean listed guest: no skew WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -spice tls-port=61000,addr=localhost' ); chk "C16b listed + -spice: WARNING mentioning spice" '[[ $o == *WARNING*[Ss]pice* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -machine type=pc-q35-11.0+pve0,accel=kvm' ); chk "C16c listed + pc-q35-11.0 (side 10.2.2): WARNING mentioning the machine" '[[ $o == *WARNING*pc-q35-11.0* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -machine type=pc-i440fx-10.3,accel=kvm' ); chk "C16d listed + pc-i440fx-10.3 (newer minor): WARNING" '[[ $o == *WARNING*pc-i440fx-10.3* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -machine type=pc-q35-10.1+pve0,accel=kvm' ); chk "C16e listed + pc-q35-10.1 (older): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -machine type=pc-q35-10.2,accel=kvm' ); chk "C16e2 listed + pc-q35-10.2 (same as side): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -machine type=pc-q35-9.2+pve1' ); chk "C16e3 listed + pc-q35-9.2 (older major): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -loadstate /dev/pve/vm-99200-state-s1' ); chk "C16f listed + -loadstate: WARNING mentioning loadstate" '[[ $o == *WARNING*loadstate* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -drive file=rbd:pool/vm-99200-disk-0:conf=/etc/ceph/ceph.conf,if=none,id=drive-scsi0' ); chk "C16g listed + rbd: drive: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -drive file=pbs:repo=x,if=none,id=d0' ); chk "C16h listed + pbs: drive: WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 99201 '99200\n' '/usr/bin/kvm \' '  -id 99201 \' '  -pidfile /var/run/qemu-server/99201.pid \' '  -spice x -loadstate y -machine pc-q35-11.0' ); chk "C16i UNLISTED guest with all skew options: no WARNING (it runs on the vendor binary)" '[[ $o != *WARNING* && $o == *"NOT listed"* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -name spice-lab \' '  -smbios type=1,product=pc-q35-11.0-x,serial=rbd:y' ); chk "C16j option values that merely contain the words are not flagged (-name spice-lab, smbios text)" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -spice a \' '  -loadstate b' ); chk "C16k several problems: one WARNING per problem" '[[ $(grep -c "^WARNING" <<<"$o") -ge 2 ]]'
 # QA PR5 follow-ups: -blockdev forms (machine >= 10.0), qxl, rbd false positives
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"rbd","pool":"p","image":"vm-200-disk-0","node-name":"n1"}'"'" ); chk "C16l -blockdev JSON \"driver\":\"rbd\": WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver": "pbs", "repository":"x"}'"'" ); chk "C16m -blockdev JSON \"driver\": \"pbs\" (space after the colon): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"node-name":"a","driver" : "alloc-track","backing":"b"}'"'" ); chk "C16n -blockdev JSON alloc-track (spaces around the colon): WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"zeroinit","file":"z"}'"'" ); chk "C16o -blockdev JSON zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=rbd,pool=p,image=i,node-name=n' ); chk "C16p -blockdev driver=rbd key=value form: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev node-name=n,driver=pbs,repository=x' ); chk "C16q -blockdev driver=pbs (not the first token): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=alloc-track,node-name=n' ); chk "C16r -blockdev driver=alloc-track: WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=zeroinit,node-name=n,file=f' ); chk "C16s -blockdev driver=zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n,file.driver=rbd,file.pool=p' ); chk "C16s2 nested file.driver=rbd: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -device qxl-vga,id=vga0,ram_size=67108864' ); chk "C16t listed + -device qxl-vga: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device qxl,id=video1' ); chk "C16u listed + qxl as a later -device: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device virtio-blk-pci,drive=qxl' ); chk "C16v no qxl device (id=qxl0 / drive=qxl are only names): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -drive file=/var/lib/vz/images/200/rbd.qcow2,if=none,id=drive-rbd \' '  -name rbd-driver=raw-vm,debug-threads=on' ); chk "C16w rbd false positive: image file / VM name containing 'rbd' and 'driver=raw': no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n1,file.driver=file,file.filename=/mnt/mydriver=rbd.raw,cache.direct=on' ); chk "C16x rbd false positive: 'driver=rbd' only inside another token (file.filename=/mnt/mydriver=rbd.raw): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"raw","file":{"driver":"file","filename":"/var/lib/vz/images/200/rbd.raw"},"node-name":"n1"}'"'" ); chk "C16y rbd false positive: harmless JSON -blockdev (drivers raw/file, path contains rbd): no WARNING" '[[ $o != *WARNING* ]]'
-o=$(sk 200 '200\n' "${base[@]}" '  -blockdev driver=raw,node-name=rbd,file=f \' '  -drive file=/dev/zvol/rpool/data/vm-200-disk-0,driver=raw,if=none,id=d0' ); chk "C16z rbd false positive: driver=raw, node-name=rbd: no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"rbd","pool":"p","image":"vm-99200-disk-0","node-name":"n1"}'"'" ); chk "C16l -blockdev JSON \"driver\":\"rbd\": WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev '"'"'{"driver": "pbs", "repository":"x"}'"'" ); chk "C16m -blockdev JSON \"driver\": \"pbs\" (space after the colon): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev '"'"'{"node-name":"a","driver" : "alloc-track","backing":"b"}'"'" ); chk "C16n -blockdev JSON alloc-track (spaces around the colon): WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"zeroinit","file":"z"}'"'" ); chk "C16o -blockdev JSON zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=rbd,pool=p,image=i,node-name=n' ); chk "C16p -blockdev driver=rbd key=value form: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev node-name=n,driver=pbs,repository=x' ); chk "C16q -blockdev driver=pbs (not the first token): WARNING mentioning pbs" '[[ $o == *WARNING*pbs* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=alloc-track,node-name=n' ); chk "C16r -blockdev driver=alloc-track: WARNING mentioning alloc-track" '[[ $o == *WARNING*alloc-track* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=zeroinit,node-name=n,file=f' ); chk "C16s -blockdev driver=zeroinit: WARNING mentioning zeroinit" '[[ $o == *WARNING*zeroinit* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n,file.driver=rbd,file.pool=p' ); chk "C16s2 nested file.driver=rbd: WARNING mentioning rbd" '[[ $o == *WARNING*rbd* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -device qxl-vga,id=vga0,ram_size=67108864' ); chk "C16t listed + -device qxl-vga: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device qxl,id=video1' ); chk "C16u listed + qxl as a later -device: WARNING mentioning qxl" '[[ $o == *WARNING*qxl* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -device virtio-net-pci,id=qxl0 \' '  -device virtio-blk-pci,drive=qxl' ); chk "C16v no qxl device (id=qxl0 / drive=qxl are only names): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -drive file=/var/lib/vz/images/99200/rbd.qcow2,if=none,id=drive-rbd \' '  -name rbd-driver=raw-vm,debug-threads=on' ); chk "C16w rbd false positive: image file / VM name containing 'rbd' and 'driver=raw': no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=raw,node-name=n1,file.driver=file,file.filename=/mnt/mydriver=rbd.raw,cache.direct=on' ); chk "C16x rbd false positive: 'driver=rbd' only inside another token (file.filename=/mnt/mydriver=rbd.raw): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev '"'"'{"driver":"raw","file":{"driver":"file","filename":"/var/lib/vz/images/99200/rbd.raw"},"node-name":"n1"}'"'" ); chk "C16y rbd false positive: harmless JSON -blockdev (drivers raw/file, path contains rbd): no WARNING" '[[ $o != *WARNING* ]]'
+o=$(sk 99200 '99200\n' "${base[@]}" '  -blockdev driver=raw,node-name=rbd,file=f \' '  -drive file=/dev/zvol/rpool/data/vm-99200-disk-0,driver=raw,if=none,id=d0' ); chk "C16z rbd false positive: driver=raw, node-name=rbd: no WARNING" '[[ $o != *WARNING* ]]'
 command rm -f "$W/stub/qm"
 
 # --- LOW 1: qad_list_has must not fork a subshell for the pattern
-fresh; printf '200\n' > "$T/vms"
-r=$(L "eval \"_orig_\$(declare -f qad_list_pat)\"; qad_list_pat() { echo \$BASHPID >> '$T/pids'; _orig_qad_list_pat \"\$@\"; }; : > '$T/pids'; me=\$BASHPID; qad_list_has 200 '$T/vms'; echo rc=\$? me=\$me; cat '$T/pids'" 2>&1)
+fresh; printf '99200\n' > "$T/vms"
+r=$(L "eval \"_orig_\$(declare -f qad_list_pat)\"; qad_list_pat() { echo \$BASHPID >> '$T/pids'; _orig_qad_list_pat \"\$@\"; }; : > '$T/pids'; me=\$BASHPID; qad_list_has 99200 '$T/vms'; echo rc=\$? me=\$me; cat '$T/pids'" 2>&1)
 chk "C17a qad_list_has still matches (rc 0)" '[[ $r == *"rc=0"* ]]'
 # The function body as it is embedded in the generated wrapper (not just in the script).
 mkw; wbody=$(sed -n '/^qad_list_has *()/,/^}/p' "$T/kvm")
@@ -676,7 +676,7 @@ chk "C17b3 mutation: backtick substitution -> predicate fails" '[[ $mut != "$wbo
 mut=${wbody//printf -v p /true }
 chk "C17b4 mutation: printf -v removed -> predicate fails" '[[ $mut != "$wbody" ]] && ! qlh_body_ok "$mut"'
 chk "C17c qad_list_has body has no command substitution" '! L "declare -f qad_list_has" | grep -q "[$](" '
-chk "C17d qad_list_has: unlisted / missing file still rc 1" '[[ $(L "qad_list_has 201 \"$T/vms\" && echo y || echo n") == n && $(L "qad_list_has 200 \"$T/none\" && echo y || echo n") == n ]]'
+chk "C17d qad_list_has: unlisted / missing file still rc 1" '[[ $(L "qad_list_has 99201 \"$T/vms\" && echo y || echo n") == n && $(L "qad_list_has 99200 \"$T/none\" && echo y || echo n") == n ]]'
 
 # --- LOW 2: purge refusal of LIST_FILE tells how to proceed
 fresh; e=$(PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ :; }; PREFIX=/opt/qemu-ad LIST_FILE=/root/my-vms WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" 2>&1 >/dev/null); rc=$?
@@ -785,7 +785,7 @@ o=$(av 321); chk "C22u virtio above a snapshot section is still reported (exactl
 # --- missing / unreadable conf: silent
 fresh; o=$(PVE_QEMU_CONF_DIR="$CF" L 'add_vm 399' 2>&1); rc=$?
 chk "C22v missing conf: add_vm rc 0, VMID added, no WARNING and no error text" '[[ $rc -eq 0 && $(vwarn "$o") -eq 0 && $o != *rror* && $o != *"No such"* ]] && grep -qx 399 "$T/vms"'
-fresh; o=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" L 'add_vm 200' 2>&1); rc=$?
+fresh; o=$(PVE_QEMU_CONF_DIR="$W/does-not-exist" L 'add_vm 99200' 2>&1); rc=$?
 chk "C22w missing conf DIR: rc 0, no WARNING" '[[ $rc -eq 0 && $(vwarn "$o") -eq 0 ]]'
 vm 322 'virtio0: local-lvm:vm-322-disk-0,size=32G'; chmod 000 "$CF/322.conf"
 if [[ -r $CF/322.conf ]]; then note "C22x unreadable conf not testable (running as a user that can read mode 000 files)"

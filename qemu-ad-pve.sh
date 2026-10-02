@@ -40,10 +40,10 @@
 # Usage
 # -----
 #   ./qemu-ad-pve.sh install          # deps, build, divert, wrapper
-#   ./qemu-ad-pve.sh add-vm 200       # send VMID 200 to the side binary
-#   ./qemu-ad-pve.sh del-vm 200
+#   ./qemu-ad-pve.sh add-vm <vmid>    # send that VMID to the side binary
+#   ./qemu-ad-pve.sh del-vm <vmid>
 #   ./qemu-ad-pve.sh status
-#   ./qemu-ad-pve.sh showcmd 200      # qm showcmd, then the rewritten argv
+#   ./qemu-ad-pve.sh showcmd <vmid>   # qm showcmd, then the rewritten argv
 #   ./qemu-ad-pve.sh uninstall        # restore /usr/bin/kvm, leave /opt
 #   ./qemu-ad-pve.sh uninstall --purge
 #

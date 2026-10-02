@@ -138,7 +138,7 @@ install_deps() {
     python3 python3-venv meson flex bison \
     libglib2.0-dev libpixman-1-dev zlib1g-dev \
     libaio-dev liburing-dev libiscsi-dev \
-    libgcrypt20-dev
+    libgcrypt20-dev libusb-1.0-0-dev
 }
 
 # verify_sha256 <file> <expected-or-empty> <label> <knob-name>
@@ -238,8 +238,9 @@ warn_version_skew() {
 # includes the qm create default) fails with "Cipher backend does not support
 # DES algorithm". gcrypt is explicit, because configure only auto-detects it
 # when the dev package happens to be installed.
-# The optional features whose dev libraries this script does not install
-# (spice, rbd, curl, libusb, usb-redir) are switched off explicitly. configure
+# libusb is enabled (libusb-1.0-0-dev is a build dep) for `-device usb-host`
+# passthrough. The optional features whose dev libraries this script does not
+# install (spice, rbd, curl, usb-redir) are switched off explicitly. configure
 # would otherwise auto-detect them, so a build host that happens to have e.g.
 # libspice-server-dev or librbd-dev would produce a different binary. Any change
 # to this list changes the build stamp, so existing builds are rebuilt.
@@ -254,7 +255,7 @@ QAD_CONFIGURE_FLAGS=(
   --disable-spice
   --disable-rbd
   --disable-curl
-  --disable-libusb
+  --enable-libusb
   --disable-usb-redir
   --disable-docs
   --disable-werror

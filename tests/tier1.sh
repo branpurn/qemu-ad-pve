@@ -609,7 +609,7 @@ chk "C15l big ldd output without libgcrypt, no stamp: still rebuilt" '[[ $rc -eq
 chk "C15m side_rebuild_reason captures ldd into a variable (no ldd | grep pipeline)" '! grep -E "ldd[^|]*[|]([^|]|$)" "$SCRIPT" | grep -v "^[[:space:]]*#" | grep -q .'
 # hermetic configure flags + stamp
 mkbq; BQ STATE="$T"
-chk "C15n configure gets --disable-spice --disable-rbd --disable-curl --disable-libusb --disable-usb-redir (host dev libs must not change the binary)" 'm=0; for f in --disable-spice --disable-rbd --disable-curl --disable-libusb --disable-usb-redir; do grep -q -- "$f" "$T/cfg.args" || { echo "missing $f"; m=1; }; done; [[ $m -eq 0 ]]'
+chk "C15n configure gets --disable-spice --disable-rbd --disable-curl --disable-usb-redir and --enable-libusb as whole flags (host dev libs must not change the binary)" 'm=0; for f in --disable-spice --disable-rbd --disable-curl --disable-usb-redir --enable-libusb; do grep -qxF -- "$f" <(tr " " "\n" < "$T/cfg.args") || { echo "missing $f"; m=1; }; done; [[ $m -eq 0 ]]'
 chk "C15o the build stamp records the --disable-* flags too" 'st=$(cat "$T/prefix/.qemu-ad-configure-flags"); [[ $st == *--disable-spice*--disable-rbd* ]]'
 mkbq; BQ STATE="$T"; rm -f "$T/cfg.args"; printf -- "--target-list=x86_64-softmmu --enable-kvm --enable-linux-aio --enable-linux-io-uring --enable-libiscsi --enable-gcrypt --disable-gnutls --disable-docs --disable-werror\n" > "$T/prefix/.qemu-ad-configure-flags"
 BQ STATE="$T" LDD_MODE=gcrypt; rc=$?
@@ -684,14 +684,42 @@ chk "C18b ...and the message says to run plain uninstall and delete the file by 
 e=$(PATH="$W/stub:$PATH" bash -c "source '$W/lib.sh'; set -euo pipefail; rm(){ :; }; PREFIX=/opt/qemu-ad LIST_FILE=/etc/qemu-ad/../x WRAPPER_PATH='$T/n1' VENDOR_PATH='$T/n2'; uninstall --purge" 2>&1 >/dev/null)
 chk "C18c non-canonical LIST_FILE refusal carries the same hint" '[[ $e == *"by hand"* ]]'
 
+# --- USB host passthrough (libusb enabled in the side build)
+cfgwords() { printf '%s\n' "$@"; }
+mkbq; BQ STATE="$T"; cw=$(tr ' ' '\n' < "$T/cfg.args")
+chk "C20a configure gets the whole flag --enable-libusb" 'grep -qxF -- --enable-libusb <<<"$cw"'
+chk "C20b configure no longer gets --disable-libusb (whole flag)" '! grep -qxF -- --disable-libusb <<<"$cw"'
+chk "C20c configure still gets --disable-usb-redir, --disable-spice (whole flags)" 'grep -qxF -- --disable-usb-redir <<<"$cw" && grep -qxF -- --disable-spice <<<"$cw"'
+chk "C20d the build stamp records --enable-libusb and not --disable-libusb" 'st=$(tr " " "\n" < "$T/prefix/.qemu-ad-configure-flags"); grep -qxF -- --enable-libusb <<<"$st" && ! grep -qxF -- --disable-libusb <<<"$st"'
+fresh; : > "$T/apt.log"; L 'install_deps' >/dev/null 2>&1
+chk "C20e apt-get install is called with libusb-1.0-0-dev as a whole argument" 'grep "^apt-get install" "$T/apt.log" | tr " " "\n" | grep -qxF libusb-1.0-0-dev'
+# stamp from before this change (old flag set) must trigger a rebuild with a reason
+mkbq; BQ STATE="$T"; rm -f "$T/cfg.args"; : > "$T/make.log"
+printf -- "--target-list=x86_64-softmmu --enable-kvm --enable-linux-aio --enable-linux-io-uring --enable-libiscsi --enable-gcrypt --disable-gnutls --disable-spice --disable-rbd --disable-curl --disable-libusb --disable-usb-redir --disable-docs --disable-werror\n" > "$T/prefix/.qemu-ad-configure-flags"
+BQ STATE="$T" LDD_MODE=gcrypt; rc=$?
+chk "C20f an install stamped with the OLD flags (--disable-libusb) is rebuilt with --enable-libusb" '[[ $rc -eq 0 && -e $T/cfg.args ]] && tr " " "\n" < "$T/cfg.args" | grep -qxF -- --enable-libusb && grep -q "^make install" "$T/make.log"'
+chk "C20g ...and the rebuild reason is reported" 'grep -qi "different configure flags" "$T/bq.out"'
+st_new=$(cat "$T/prefix/.qemu-ad-configure-flags")
+chk "C20h the stamp is rewritten to the new flags (differs from the old one), so the next run is a no-op" '[[ $st_new == *" --enable-libusb "* && $st_new != *--disable-libusb* ]] && rm -f "$T/cfg.args"; : > "$T/make.log"; BQ STATE="$T" LDD_MODE=gcrypt && [[ ! -e $T/cfg.args && ! -s $T/make.log ]]'
+# order: dependencies are installed before the rebuild, even when the side binary already exists
+chk "C20i cmd_install runs install_deps before build_qemu (new apt dep present before an in-place rebuild)" 'b=$(L "declare -f cmd_install"); a=${b%%install_deps*}; c=${b%%build_qemu*}; [[ $b == *install_deps* && ${#a} -lt ${#c} ]]'
+# an "expectation" test: a side binary built with libusb lists usb-host; one built with --disable-libusb does not
+printf '#!/bin/bash\n[[ $1 == -device && $2 == help ]] && { echo "USB devices:"; echo "name \"usb-host\", bus USB"; echo "name \"usb-kbd\", bus USB"; }\n' > "$W/side-usb"; chmod +x "$W/side-usb"
+printf '#!/bin/bash\n[[ $1 == -device && $2 == help ]] && { echo "USB devices:"; echo "name \"usb-kbd\", bus USB"; }\n' > "$W/side-nousb"; chmod +x "$W/side-nousb"
+chk "C20j expectation (stub binary, not a real QEMU): usb-host is the check to run on a libusb build; absent without it" '"$W/side-usb" -device help | grep -q usb-host && ! "$W/side-nousb" -device help | grep -q usb-host'
+note "C20k a real usb-host passthrough test needs a host USB device and /dev/bus/usb access; not covered by tier1"
+
 # --- README
 R="$(dirname "$SCRIPT")/README.md"
 chk "C19a README has a 'Vendor vs side version skew' section" 'grep -q "^## Vendor vs side version skew" "$R"'
 chk "C19b skew table covers spice/qxl, pc-q35-11.0, rbd/pbs, CPU models, -loadstate, -id, +pveN, -iscsi, argv[0]" 'sec=$(sed -n "/^## Vendor vs side version skew/,/^## [^V]/p" "$R"); m=0; for k in "-spice" "qxl" "pc-q35-11.0" "rbd" "pbs" "-loadstate" "-id" "+pve" "-iscsi" "argv"; do grep -qF -- "$k" <<<"$sec" || { echo "missing $k"; m=1; }; done; grep -q "^| *Option" <<<"$sec" && [[ $m -eq 0 ]]'
 chk "C19c README mentions the crypto backend / libgcrypt and the automatic rebuild" 'grep -qi "libgcrypt" "$R" && grep -qi "rebuil" "$R"'
 chk "C19e README no longer says GraniteRapids/avx10 are missing from 10.2.2, and says only SapphireRapids-v5 is" 'sec=$(grep "^| CPU model" "$R"); [[ -n $sec && $sec == *SapphireRapids-v5* && $sec == *"exist in 10.2.2"* && $sec != *"newer than 10.2 (for example"* ]]'
-chk "C19f README says http(s)/ftp(s)/spice/rbd/usb are absent because of the build flags, not intrinsic" 'm=0; for k in --disable-spice --disable-rbd --disable-curl --disable-libusb; do grep -q -- "$k" "$R" || { echo "missing $k"; m=1; }; done; [[ $m -eq 0 ]] && ! grep -q "Vendor-only block drivers (.pve-qemu. patches; rbd needs librbd)" "$R"'
+chk "C19f README says http(s)/ftp(s)/spice/rbd/usb are absent because of the build flags, not intrinsic" 'm=0; for k in --disable-spice --disable-rbd --disable-curl --disable-usb-redir; do grep -q -- "$k" "$R" || { echo "missing $k"; m=1; }; done; [[ $m -eq 0 ]] && ! grep -q "Vendor-only block drivers (.pve-qemu. patches; rbd needs librbd)" "$R"'
 chk "C19d README mentions showcmd WARNING lines" 'grep -q "WARNING" "$R"'
+
+chk "C20l README: usb-host is supported (--enable-libusb, libusb-1.0-0-dev); usb-redir and spice are not" 'ln=$(grep "usb-host" "$R" | head -1); [[ -n $ln ]] && grep -q -- "--enable-libusb" "$R" && grep -q "libusb-1.0-0-dev" "$R" && grep -q -- "--disable-usb-redir" "$R" && ! grep "^The side build also passes" "$R" | grep -q -- "--disable-libusb" && grep -qi "usb-redir" "$R" && grep -qi "/dev/bus/usb" "$R"'
+chk "C20m README no longer lists usb-host as unsupported / needing flags removed" '! grep -q "USB passthrough needs a side build" "$R" && ! grep -qF "| \`usb-host\`, \`usb-redir\` |" "$R"'
 
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

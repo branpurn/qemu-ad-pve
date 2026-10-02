@@ -129,7 +129,7 @@ reset; run_t2 setup "${DEFAULT_ENV[@]}" REF=abc123; [[ $rc -ne 0 && $out == *"RE
 # (WORK_DIR, OUT, results.tsv, run.log, ...). Only subcommands that are safe to run hermetically are exercised: with a
 # refusing gate each one must stop in gate() (setup also has the unset-REF refusal behind it); `table` is a pure report.
 fs_clean() { [[ -z $(ls -A "$ROOT/work" 2>/dev/null) && -z $(ls -A "$ROOT/home" 2>/dev/null) ]]; }
-wipe()     { rm -rf "$ROOT/work" "$ROOT/home"; mkdir -p "$ROOT/work" "$ROOT/home"; }
+wipe()     { rm -rf "${ROOT:?}/work" "${ROOT:?}/home"; mkdir -p "$ROOT/work" "$ROOT/home"; }
 for sub in gate setup teardown table; do
   wipe; reset; run_t2 "$sub" "${DEFAULT_ENV[@]}" TEST_HOSTNAME=some-other-node
   [[ $rc -ne 0 && $out == *"wrong host"* ]] && ok "$sub, gate refuses (wrong host): aborts" || bad "$sub wrong host (rc=$rc out=${out:0:160})"

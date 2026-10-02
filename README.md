@@ -24,6 +24,54 @@ Use it on a machine you control, for software you are developing or testing. Do 
 
 A `+pveN` machine-type suffix is stripped only on the side-binary path. Vanilla QEMU rejects it. Pin the guest to a type that tree knows anyway, such as `pc-q35-10.1`.
 
+## Guest device compatibility
+
+**Listed guests cannot use virtio devices unless the guest has drivers that match the rewritten IDs.** The device-identity patch rewrites PCI vendor and device IDs on the side binary. Everything that was `1af4:*` (the virtio vendor) is reported as `8086:*`, and the Windows virtio drivers bind by the `1af4` IDs, so they do not load. In a Windows 10 test guest (side QEMU 10.2.2 with the patch, real host) that meant:
+
+- With a **virtio-scsi** disk, OVMF reported `No bootable option` on `scsi0`, and Windows Setup also failed on the disk.
+- The **virtio-serial** channel behind the guest agent (qemu-ga) was lost.
+- A **virtio-net** NIC would show as `8086:1000`; the test guest used e1000e instead.
+
+A listed guest therefore needs **non-virtio devices**: a SATA or NVMe disk, an e1000e NIC, and no reliance on virtio-balloon or qemu-ga. e1000e (82574L) is the NIC that was tested and verified on the side QEMU. Other emulated NICs (rtl8139, e1000, vmxnet3) are untested here and are not recommended without a test; note that vmxnet3 has no inbox Windows driver, so a fresh Windows install would be left without a network. NVMe is also untested (no row below). The other option is a guest driver that matches the spoofed IDs.
+
+**Switch the guest's devices before you add it to the list.** Do it on the vendor QEMU (the guest is not yet in `/etc/qemu-ad/vms`), so the guest OS installs the SATA and e1000e drivers while it still boots normally. Only then run `add-vm`. In practice, for Windows:
+
+1. With the guest still unlisted, move the disk to SATA (`sata0`) and the NIC to `e1000e`, set `balloon: 0`, and turn the guest agent off in the VM options. Boot it and let Windows install the drivers.
+2. Shut down, then `./qemu-ad-pve.sh add-vm <vmid>`.
+3. For a new Windows install, do the install itself on SATA and e1000e on the vendor QEMU (Windows Setup has the AHCI and e1000e drivers built in), and only then add the guest.
+
+`del-vm` restores the normal IDs: the patch is applied only to the side binary, and a guest that is not listed runs on the vendor binary (`pve-qemu-kvm`), which reports `1af4` as usual. Switch back to virtio devices after `del-vm` if you want them again (the guest then needs the virtio drivers still installed).
+
+`add-vm <vmid>` and `showcmd <vmid>` (for a listed VMID) read `/etc/pve/qemu-server/<vmid>.conf` and print a `WARNING` line on stdout for each of these:
+
+- a virtio disk (`virtio0:` and so on);
+- `scsihw: virtio-scsi-pci` or `virtio-scsi-single` together with a `scsiN:` disk (the PVE default `scsihw` is `lsi`, which is not warned about);
+- an explicit virtio NIC (`net0: virtio=...`);
+- `balloon: N` with N other than 0;
+- the guest agent enabled (`agent: 1` or `agent: enabled=1`), because the qemu-ga channel is a virtio-serial port. `type=isa` is not warned about.
+
+The warning changes nothing: `add-vm` still adds the guest and `showcmd` still prints, and the exit status is the same. Only the current config is read, up to the first `[snapshot]` section. If the file is missing or unreadable the check is skipped without a message. The directory can be changed with `PVE_QEMU_CONF_DIR` (default `/etc/pve/qemu-server`); the tests use it. It is a check of the config lines only: it does not look at `args:` lines or at devices that Proxmox adds by default. **Ballooning is on by default in Proxmox** when the config has no `balloon:` line, so a guest without `balloon: 0` can still get a virtio-balloon device without a warning. Set `balloon: 0` explicitly. When the config has no `balloon:` line, `add-vm` and `showcmd` print one `INFO:` line (not a `WARNING`) saying so; it is only printed when the config file was read.
+
+### Device table
+
+Vendor ID is what the guest sees on the vendor QEMU; side ID is what it sees on the side QEMU. Rows come from PCI listings of a Windows 10 guest on both binaries (guest device manager and QEMU `info pci`). Rows marked *inferred* were not observed and follow from the same rewrite.
+
+| Device | Vendor ID | Side ID | Works on the side QEMU? |
+| --- | --- | --- | --- |
+| virtio-scsi-pci | `1af4:1004` | `8086:1004` | No. Guest vioscsi does not bind; OVMF: `No bootable option`; Windows Setup fails on the disk |
+| virtio-serial (qemu-ga channel) | `1af4:1003` | `8086:1003` | No. The qemu-ga channel is lost (the device exists, the guest driver does not bind) |
+| virtio-net | `1af4:1000` | `8086:1000` | No (inferred: the driver binds by `1af4`; the test guest switched to e1000e before trying it) |
+| virtio-blk (`virtioN:`) | `1af4:*` (inferred) | `8086:*` (inferred) | No (inferred: same rewrite; not tested, exact IDs not recorded) |
+| virtio-balloon | `1af4:*` (inferred) | `8086:*` (inferred) | No (inferred: same rewrite; not tested, exact IDs not recorded) |
+| AHCI SATA controller (ICH9) | `8086:2922` | `8086:2922` | Yes. SATA disk boots and installs |
+| e1000e NIC (82574L) | `8086:10d3` | `8086:10d3` | Yes |
+| PCIe root port (`pcie-root-port`) | `1b36:000c` | `8086:000c` | Yes (only the ID changes; no guest driver needed) |
+| PCI bridge (`pci.N`) | `1b36:0001` | `8086:0001` | Yes (only the ID changes) |
+| Standard VGA | `1234:1111` | not present with `vga none` | n/a. Test guests used `vga none` with a passed-through GPU |
+| ICH9 LPC (`2918`), AHCI (`2922`), SMBus (`2930`), USB UHCI/EHCI (`2934` to `2939`, `293a`, `293c`), HD audio (`293e`), host bridge (`29c0`) | subsystem `1af4:1100` | subsystem `8086:8086` | Yes (only the subsystem ID changes; the device ID stays `8086:xxxx`) |
+
+SMBIOS on the side binary reports an ASUS M4A88TD-M board. Passed-through devices (for example the NVIDIA GPU, `10de:2704`) keep their own IDs.
+
 ## Install
 
 Run on the Proxmox node, as root.
@@ -53,7 +101,7 @@ qm start 200
 | `uninstall` | Restore `/usr/bin/kvm`, leave `/opt/qemu-ad` |
 | `uninstall --purge` | Also remove `/opt/qemu-ad` and the VMID list |
 
-Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD` (set to `1`), `PATCH_REPO`, `TARBALL_URL`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`, `QEMU_SHA256`, `PATCH_SHA256`, `DPKG_LOCK` (the dpkg lock file that `install`/`uninstall` check before touching the divert; default `/var/lib/dpkg/lock-frontend`). `./qemu-ad-pve.sh help` lists them all. `LIST_FILE` and `PREFIX` are also what `uninstall --purge` deletes, so both are checked against an allow-list first: `PREFIX` must be a directory below `/opt`, `/srv` or `/usr/local` (not one of the standard `/usr/local` subdirectories such as `bin` or `share`), and `LIST_FILE` must be a file under `/etc/qemu-ad` or `/var/lib/qemu-ad` (removed with `rm -f`; a directory is refused). If `--purge` refuses your `LIST_FILE`, nothing has been changed: run plain `uninstall` and delete the file by hand. Non-canonical spellings (`..`, `//`, a trailing `/`, a `.` component such as `/./` or a trailing `/.`) are rejected for both. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
+Overrides (environment variables): `QEMU_VER`, `PREFIX`, `SRC_ROOT`, `FORCE_REBUILD` (set to `1`), `PATCH_REPO`, `TARBALL_URL`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`, `QEMU_SHA256`, `PATCH_SHA256`, `DPKG_LOCK` (the dpkg lock file that `install`/`uninstall` check before touching the divert; default `/var/lib/dpkg/lock-frontend`), `PVE_QEMU_CONF_DIR` (where `add-vm` and `showcmd` read `<vmid>.conf` for the virtio warning; default `/etc/pve/qemu-server`). `./qemu-ad-pve.sh help` lists them all. `LIST_FILE` and `PREFIX` are also what `uninstall --purge` deletes, so both are checked against an allow-list first: `PREFIX` must be a directory below `/opt`, `/srv` or `/usr/local` (not one of the standard `/usr/local` subdirectories such as `bin` or `share`), and `LIST_FILE` must be a file under `/etc/qemu-ad` or `/var/lib/qemu-ad` (removed with `rm -f`; a directory is refused). If `--purge` refuses your `LIST_FILE`, nothing has been changed: run plain `uninstall` and delete the file by hand. Non-canonical spellings (`..`, `//`, a trailing `/`, a `.` component such as `/./` or a trailing `/.`) are rejected for both. The patch file name and the tarball version must match. The default is 10.2.2 because that is the patch this script asks the cloned repo for.
 
 `install` checks the QEMU tarball and the patch file against pinned SHA-256 values for 10.2.2 and stops on a mismatch. For another `QEMU_VER` there is no built-in pin: the script warns and continues, or you can export `QEMU_SHA256` and `PATCH_SHA256` to enforce your own. `status` and a repeated `install` warn if the built side binary does not report `QEMU_VER`; set `FORCE_REBUILD=1` to rebuild.
 
@@ -92,9 +140,9 @@ On the side-binary path the wrapper removes options that vanilla QEMU does not u
 
 The side build also passes `--disable-spice --disable-rbd --disable-curl --disable-usb-redir`, so the result does not depend on which dev packages the build host happens to have. Changing the flag list changes the stamp, so an existing build made with other flags (for example one from before these `--disable-*` flags) is rebuilt by the next `install`.
 
-**USB passthrough:** `-device usb-host` (`qm set <vmid> --usb0 host=<vid>:<pid>`) is supported: the side build uses `--enable-libusb` (`libusb-1.0-0-dev` is installed by `install`). `usb-redir` and SPICE are still not supported. The host needs access to `/dev/bus/usb` (QEMU runs as root under PVE, so this is normally fine). A real passthrough test needs a physical USB device on the host; the tier-1 tests only check the build flags, the dependency and the rebuild, not a device. An existing install built with `--disable-libusb` is rebuilt once by the next `install`, which also installs the new build dependency first.
+**USB passthrough:** `-device usb-host` (`qm set <vmid> --usb0 host=<vid>:<pid>`) is supported: the side build uses `--enable-libusb` (`libusb-1.0-0-dev` is installed by `install`). `usb-redir` and SPICE are still not supported. The host needs access to `/dev/bus/usb` (QEMU runs as root under PVE, so this is normally fine). A real passthrough test needs a physical USB device on the host; the tier-1 tests only check the build flags, the dependency and the rebuild, not a device. An existing install built with `--disable-libusb` is rebuilt once by the next `install`, which also installs the new build dependency first. `usb-host` also needs the runtime library `libusb-1.0-0` at run time. It is pulled in by the `libusb-1.0-0-dev` build dependency, so keep it installed: run `apt-mark manual libusb-1.0-0` so that `apt autoremove` does not remove it later (the script does not do this for you).
 
-Builds made before this check have no crypto backend, so a guest with a VGA/VNC console fails to start. `install` now rebuilds the side binary when it is missing the backend: it compares the configure flags recorded in `/opt/qemu-ad/.qemu-ad-configure-flags` with the current ones, and for a build that predates the stamp it checks with `ldd` that `libgcrypt` is linked. `status` prints a `WARNING` for the same condition. The rebuild takes a minute or two on 8 vCPUs; `FORCE_REBUILD=1 ./qemu-ad-pve.sh install` forces one.
+Builds made before this check have no crypto backend, so a guest with a VGA/VNC console fails to start. `install` now rebuilds the side binary when it is missing the backend: it compares the configure flags recorded in `/opt/qemu-ad/.qemu-ad-configure-flags` with the current ones, and for a build that predates the stamp it checks with `ldd` that `libgcrypt` is linked. `status` prints a `WARNING` for the same condition. The first `install` and any rebuild is a full QEMU compile: it takes from about a minute on a fast 8-core machine (warm caches) to 30-60 minutes on small hosts, depending on CPU. `FORCE_REBUILD=1 ./qemu-ad-pve.sh install` forces one.
 
 ## Do not `apt remove pve-qemu-kvm` while diverted
 

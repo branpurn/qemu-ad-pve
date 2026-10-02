@@ -859,5 +859,17 @@ chk "C23r README uses pcie-root-port, not ich9-pcie-port, as the device name" 'g
 chk "C23s README: libusb-1.0-0 runtime lib must stay installed (apt-mark manual libusb-1.0-0)" 'grep -q "apt-mark manual libusb-1.0-0" "$R2" && grep -q "libusb-1.0-0-dev" "$R2"'
 chk "C23t README: rebuild estimate is no longer just 'a minute or two' and gives the 30-60 minute small-host range" '! grep -q "a minute or two" "$R2" && grep -q "30-60 minutes" "$R2" && ! grep -q "[^0-9]1-2 minutes" "$R2"'
 
+echo "== C25 break-glass tool: dry-run default, refusals, back-out (tests/breakglass-test.sh, hermetic stubs + temp sandbox, no root/PVE)"
+BD=$(dirname "$SCRIPT")
+if [[ -r $BD/tests/breakglass-test.sh && -r $BD/tools/qemu-ad-breakglass.sh ]]; then
+  bgo=$(bash "$BD/tests/breakglass-test.sh" 2>&1); bgrc=$?
+  chk "C25a breakglass-test.sh passes ($(tail -1 <<<"$bgo"))" '[[ $bgrc -eq 0 ]] && tail -1 <<<"$bgo" | grep -q "fail=0$" && ! grep -q "^FAIL" <<<"$bgo"'
+  chk "C25b the tool is a dry run unless --apply is given, and --help says so" 'h=$(bash "$BD/tools/qemu-ad-breakglass.sh" --help); grep -q "DRY-RUN IS THE DEFAULT" <<<"$h" && grep -q -- "--apply" <<<"$h" && grep -q "^DRY=\$((1 - APPLY))" "$BD/tools/qemu-ad-breakglass.sh"'
+  chk "C25c VM destruction is opt-in via QAD_BREAKGLASS_VMIDS (empty default) and needs QAD_PROTECTED_VMIDS" 'grep -q "^VMIDS=\"\${QAD_BREAKGLASS_VMIDS:-}\"" "$BD/tools/qemu-ad-breakglass.sh" && grep -q "QAD_PROTECTED_VMIDS is not" "$BD/tools/qemu-ad-breakglass.sh"'
+  chk "C25d README documents the break-glass tool and the dry-run default" 'grep -q "tools/qemu-ad-breakglass.sh" "$R" && grep -q "dry run unless you pass .--apply" "$R"'
+else
+  note "C25 tests/breakglass-test.sh or tools/qemu-ad-breakglass.sh not found next to the script; skipped"
+fi
+
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

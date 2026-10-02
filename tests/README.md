@@ -19,6 +19,7 @@ Nothing in here is specific to one site: node names, VMIDs, storage and bridge n
 | `tier15-guard-test.sh` | Tests of that guard (unprivileged, touches nothing). |
 | `tier2.sh` | Tier 2: the full runner (cases P0-P8) for a disposable PVE node: real build, real guests. The **only** tier-2 runner; it supersedes the earlier pre-PR #3 draft. |
 | `tier2-gate-test.sh` | Tests of the tier-2 safety gate against stub `qm`/`hostname`/`pvecm` binaries (never touches a real node). |
+| `breakglass-test.sh` | Tests of `tools/qemu-ad-breakglass.sh` (the standalone back-out) with stub `qm`/`dpkg-divert`/`dpkg`/`apt-get` in a temp-dir sandbox: dry-run default, idempotence, failure paths, path/block-device/VMID refusals. No root, no PVE; `tier1.sh` runs it (C25). |
 | `HARNESS-SPEC.md` | The test plan: prerequisites, safety gate, per-case steps and pass criteria. Written against PR #1 and since updated; see the notes at its top. |
 | `w10-code43-check.ps1` | Read-only PowerShell check run *inside a Windows 10 guest*: reports NVIDIA display-adapter health (Code 43) as one JSON document. |
 | `w10-code43-run.sh` | Runs the check on a guest over SSH from a Linux machine and maps the JSON result to an exit code. |
@@ -57,6 +58,20 @@ Pass criteria: every script ends with `TIER15 RESULT: pass=N fail=M info=K` and 
 set `STRICT_WINDOW=1` to make it a `FAIL`. An empty `PREFIX` is *not* a purge-reject case: it means the default `/opt/qemu-ad`.
 
 `bash tests/tier15-guard-test.sh` tests the guard itself and needs no privileges.
+
+## Break-glass tool tests
+
+```bash
+bash tests/breakglass-test.sh      # no root, no PVE; last line `BREAKGLASS TEST: pass=N fail=0`
+```
+
+Runs `tools/qemu-ad-breakglass.sh` under `env -i` with a temp stub dir first on `PATH` (stubs for `qm`, `dpkg-divert`, `dpkg`, `apt-get`;
+each only edits state files in the temp dir) and every path override (`PREFIX`, `SRC_ROOT`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE`,
+`DPKG_LOCK`, state and PID dirs) inside a temp sandbox. The tool's `QAD_BREAKGLASS_SANDBOX` hook is set, so it refuses any path outside that dir and
+allows `--apply` without root. The tests check that the default is a dry run that changes nothing, a full back-out and its idempotence, `--keep-build`, the
+recovery paths (missing vendor file, failed `apt`, failed `dpkg-divert --remove`, foreign divert, held dpkg lock), the path and block-device
+refusals, the opt-in VM destruction and protected-VMID rules (fixture VMIDs 7001-7003), and pre-state capture and `--verify`. Refusal tests run without
+`--apply`, and a final check confirms the real `/usr/bin/kvm` was not touched. **Never run the tool itself against a real host from a test.**
 
 ## Tier 2 (disposable Proxmox VE node)
 

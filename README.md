@@ -161,6 +161,19 @@ apt install --reinstall pve-qemu-kvm   # dpkg writes the vendor binary back to /
 
 Then remove the package, if that is what you wanted, only after `uninstall` has run.
 
+### Recovery: break-glass back-out
+
+If `qemu-ad-pve.sh uninstall` cannot be used at all (the script is gone, the divert is half-applied, or it keeps failing), use the standalone `tools/qemu-ad-breakglass.sh`. It does not need `qemu-ad-pve.sh`, honours the same `PREFIX`, `SRC_ROOT`, `LIST_FILE`, `WRAPPER_PATH`, `VENDOR_PATH`, `LOG_FILE` and `DPKG_LOCK` overrides, and is idempotent. **It is a dry run unless you pass `--apply`.**
+
+```bash
+tools/qemu-ad-breakglass.sh                    # dry run: prints the plan and the current-state report, changes nothing
+tools/qemu-ad-breakglass.sh --capture-prestate --apply   # optional: snapshot VM status/PIDs first (the verifier compares against it)
+tools/qemu-ad-breakglass.sh --apply            # restore the real kvm, then remove the VMID list, wrapper log, PREFIX and build tree
+tools/qemu-ad-breakglass.sh --verify           # read-only PASS/FAIL end-state report
+```
+
+It restores the real `/usr/bin/kvm` first (removes the divert and moves `kvm.pve` back; reinstalls `pve-qemu-kvm` or, as a last resort, symlinks the packaged binary if the vendor file is gone) and removes the side QEMU only if that worked. A divert that is not ours is left alone. Guests are not touched unless you opt in with `QAD_BREAKGLASS_VMIDS="<vmid> ..."`, which also requires `QAD_PROTECTED_VMIDS="<vmid> ..."` (or the word `none`); a VMID in both lists is refused. It refuses to write to a block device, and refuses `PREFIX`/`LIST_FILE` outside the same allow-lists as `uninstall --purge`. Run `tools/qemu-ad-breakglass.sh --help` for the full list. Tests: `tests/breakglass-test.sh` (stubs only, see `tests/README.md`).
+
 ## Upstream
 
 The device-identity patch is not vendored here. `install` clones [qemu-anti-detection](https://github.com/zhaodice/qemu-anti-detection) and applies the patch that matches `QEMU_VER`. QEMU itself is downloaded from `https://download.qemu.org`. Both remain under their own licenses.

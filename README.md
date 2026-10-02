@@ -70,7 +70,7 @@ Vendor ID is what the guest sees on the vendor QEMU; side ID is what it sees on 
 | Standard VGA | `1234:1111` | not present with `vga none` | n/a. Test guests used `vga none` with a passed-through GPU |
 | ICH9 LPC (`2918`), AHCI (`2922`), SMBus (`2930`), USB UHCI/EHCI (`2934` to `2939`, `293a`, `293c`), HD audio (`293e`), host bridge (`29c0`) | subsystem `1af4:1100` | subsystem `8086:8086` | Yes (only the subsystem ID changes; the device ID stays `8086:xxxx`) |
 
-SMBIOS on the side binary reports an ASUS M4A88TD-M board. Passed-through devices (for example the NVIDIA GPU, `10de:2704`) keep their own IDs.
+By default the patched side binary reports an ASUS M4A88TD-M board in SMBIOS (the patch's built-in default for PC machine types; override it per guest with `-smbios` in `args:`). Passed-through devices (for example a GPU, with its own `10de:xxxx` ID) keep their own IDs.
 
 ## Install
 
@@ -78,11 +78,11 @@ Run on the Proxmox node, as root.
 
 ```bash
 ./qemu-ad-pve.sh install
-./qemu-ad-pve.sh add-vm 200
-qm set 200 --machine pc-q35-10.1
-qm set 200 --cpu host,hidden=1,hv-vendor-id=GenuineIntel
-./qemu-ad-pve.sh showcmd 200
-qm start 200
+./qemu-ad-pve.sh add-vm 100
+qm set 100 --machine pc-q35-10.1
+qm set 100 --cpu host,hidden=1,hv-vendor-id=GenuineIntel
+./qemu-ad-pve.sh showcmd 100
+qm start 100
 ```
 
 `install` is safe to re-run. It installs build dependencies, shallow-clones the patch repository into `/opt/src/qemu-anti-detection`, downloads the matching QEMU tarball, applies `qemu-10.2.2.patch`, and builds with `--prefix=/opt/qemu-ad`. A stamp file stops a second run from reapplying the patch. Set `FORCE_REBUILD=1` to build again.

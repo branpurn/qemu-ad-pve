@@ -16,7 +16,7 @@
 .PARAMETER Strict
   Exit 1 if any LEAK is found (default: always exit 0 after printing the summary).
 #>
-param([switch]$Strict)
+param([switch]$Strict)   # must stay the first statement; if run through a wrapper that prepends code, drop -Strict handling
 
 $ErrorActionPreference = 'SilentlyContinue'
 $script:leaks = 0
@@ -50,7 +50,7 @@ if ($bbs -match $vmRx) { Out-Sig LEAK 'Baseboard' $bbs } else { Out-Sig MASKED '
 $pnp = Get-PnpDevice -PresentOnly
 $hits = $pnp | Where-Object {
     $_.InstanceId -match 'VEN_1AF4|VEN_1B36|VEN_1234|VEN_15AD|VEN_80EE|VMBUS|ACPI\\QEMU|ACPI\\BOCHS|ACPI\\BXPC' -or
-    $_.FriendlyName -match 'QEMU|Virtio|Red Hat|VMware|VirtualBox|Bochs|Hyper-V Generation|Hyper-V Virtualization'
+    $_.FriendlyName -match 'QEMU|Virtio|Red Hat|VMware|VirtualBox|Bochs|Hyper-V Generation'
 }
 if ($hits) { foreach ($h in $hits) { Out-Sig LEAK 'PnP device' "$($h.FriendlyName) [$($h.InstanceId)]" } }
 else       { Out-Sig MASKED 'PnP devices' 'no known virtual-device IDs' }
@@ -66,13 +66,21 @@ foreach ($n in Get-NetAdapter -Physical) {
 }
 
 # 7. Guest agents / paravirtual services and processes
-$svc = Get-Service | Where-Object { $_.Name -match 'QEMU|qemu-ga|Balloon|vioserial|VirtioFs|vmic|VBoxService|VMTools|spice' }
+# Stock Windows ships stopped Hyper-V integration stubs (vmic*), so those only count while Running.
+$svc = Get-Service | Where-Object {
+    $_.Name -match 'QEMU|qemu-ga|Balloon|vioserial|VirtioFs|VBoxService|VMTools|spice' -or
+    ($_.Name -match '^vmic' -and $_.Status -eq 'Running')
+}
 if ($svc) { foreach ($s in $svc) { Out-Sig LEAK 'Service' "$($s.Name) ($($s.Status))" } } else { Out-Sig MASKED 'Services' 'none' }
 $procs = Get-Process | Where-Object { $_.Name -match 'qemu|vbox|vmtools|vmware|spice|vdagent|virtio' }
 if ($procs) { foreach ($p in $procs) { Out-Sig LEAK 'Process' $p.Name } } else { Out-Sig MASKED 'Processes' 'none' }
 
-# 8. Paravirtual drivers registered (loaded or not)
-$drv = Get-CimInstance Win32_SystemDriver | Where-Object { $_.Name -match '^(vio|netkvm|balloon|vmbus|storvsc|hyperv|vbox|vmware|vmci|vmhgfs)' }
+# 8. Paravirtual drivers. Third-party ones (virtio, VBox, VMware) count even when stopped because stock
+#    Windows does not contain them; the inbox Hyper-V stubs (vmbus, storvsc, ...) only count while Running.
+$drv = Get-CimInstance Win32_SystemDriver | Where-Object {
+    $_.Name -match '^(vio|netkvm|balloon|vbox|vmware|vmci|vmhgfs)' -or
+    ($_.Name -match '^(vmbus|storvsc|hyperv|HyperVideo|VMBusHID)' -and $_.State -eq 'Running')
+}
 if ($drv) { foreach ($d in $drv) { Out-Sig LEAK 'Driver registered' "$($d.Name) ($($d.State))" } } else { Out-Sig MASKED 'Drivers' 'none' }
 
 # 9. Physical-hardware plausibility (bare metal normally has these)
@@ -85,7 +93,7 @@ $thermal = @(Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi).
 $fans = @(Get-CimInstance Win32_Fan).Count
 if ($thermal -eq 0 -and $fans -eq 0) { Out-Sig INFO 'Thermal/fan sensors' 'none exposed' } else { Out-Sig MASKED 'Thermal/fan sensors' "$thermal zone(s), $fans fan(s)" }
 $mon = Get-CimInstance Win32_DesktopMonitor
-if ($mon -and ($mon.PNPDeviceID -match 'DISPLAY\\(EVE|RHT|QEM|VBX)')) { Out-Sig LEAK 'Monitor ID' ($mon.PNPDeviceID -join ', ') }
+if ($mon -and ($mon.PNPDeviceID -match 'DISPLAY\\(RHT|QEM|VBX)')) { Out-Sig LEAK 'Monitor ID' ($mon.PNPDeviceID -join ', ') }
 elseif ($mon) { Out-Sig INFO 'Monitor ID' ($mon.PNPDeviceID -join ', ') }
 
 # 10. CPU vendor vs. board era consistency (rough heuristic: report both for human review)

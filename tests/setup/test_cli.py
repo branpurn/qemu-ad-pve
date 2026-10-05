@@ -36,9 +36,11 @@ def test_install_dry_run_prints_everything_and_changes_nothing(stub_env):
     assert p.returncode == 0, p.stderr + out
     assert "auto-selected the only passthrough-ready GPU: 0000:01:00" in out
     assert "qm create 9201 " in out and "--machine q35,viommu=intel" in out
-    assert "vfio-pci,host=0000:01:00.0,id=qadgpu0,bus=gpubr,addr=0x1.0,multifunction=on" in out
+    assert "vfio-pci,host=0000:01:00.0,id=gpu-vga,bus=gpubr,addr=0x1.0,multifunction=on" in out
+    assert "--startup down=240" in out and "--onboot 0" in out and "--hostpci" not in out
+    assert "write /var/lib/vz/snippets/qad-l1-9201-gpu-guard.pl (mode 0o755" in out
     assert "qm set 9201 --ide0 local:iso/Win10_22H2_English_x64.iso,media=cdrom" in out
-    assert "--hookscript local:snippets/qad-l1-9201-hook.sh" in out
+    assert "--hookscript local:snippets/qad-l1-9201-gpu-guard.pl" in out
     assert "genisoimage -quiet -output" in out and "qad-l1-9201-seed.iso -volid cidata" in out
     for step in steps.STEP_NAMES:
         assert f"== {step}:" in out

@@ -18,18 +18,21 @@ ROOT_PORT = "ich9-pcie-port-1"  # defined by qemu-server's pve-q35-4.0.cfg on ev
 
 
 def l1_args(gpu: Gpu, mmio64_mb: int) -> str:
-    """The args: line. qm cannot put both GPU functions behind a pcie-pci-bridge (PR #4:
-    'group N used in multiple address spaces' with the Intel vIOMMU), so the GPU is NOT a
-    hostpciN entry but raw -device options appended by qm at the end of the command line.
-    intel-iommu + kernel-irqchip=split come from `machine: q35,viommu=intel`."""
-    parts = [f"-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string={mmio64_mb}",
-             f"-device pcie-pci-bridge,id={GPU_BRIDGE_ID},bus={ROOT_PORT},addr=0x0"]
+    """The args: line, in the exact shape PR #24 proved with plain `qm start 9200`
+    (docs/gpu-phase-qm-native-9200.md, samples/qm-native-9200/9200.conf.active-final):
+    pcie-pci-bridge on ich9-pcie-port-1, every GPU function behind it, then the OVMF MMIO fw_cfg.
+    No hostpciN (qm-native topology fails with 'group N used in multiple address spaces'), no
+    hand-written intel-iommu: `machine: q35,viommu=intel` makes qemu-server emit intel-iommu
+    (intremap, caching-mode) and kernel-irqchip=split itself."""
+    parts = [f"-device pcie-pci-bridge,id={GPU_BRIDGE_ID},bus={ROOT_PORT},addr=0x0"]
     for i, f in enumerate(gpu.functions):
         fn = f.bdf.rsplit(".", 1)[1]
-        dev = f"-device vfio-pci,host={f.bdf},id=qadgpu{i},bus={GPU_BRIDGE_ID},addr=0x1.{fn}"
+        dev_id = "gpu-vga" if i == 0 else ("gpu-audio" if f.cls.startswith("0403") else f"gpu-fn{fn}")
+        dev = f"-device vfio-pci,host={f.bdf},id={dev_id},bus={GPU_BRIDGE_ID},addr=0x1.{fn}"
         if i == 0 and len(gpu.functions) > 1:
             dev += ",multifunction=on"
         parts.append(dev)
+    parts.append(f"-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string={mmio64_mb}")
     return " ".join(parts)
 
 
@@ -45,7 +48,7 @@ def seed_volname(vmid: str) -> str:
 
 
 def hook_volname(vmid: str) -> str:
-    return f"qad-l1-{vmid}-hook.sh"
+    return f"qad-l1-{vmid}-gpu-guard.pl"
 
 
 def qm_create(cfg: Config, vmid: str, install_id: str, gpu: Gpu, image_path: str, seed_volid: str,
@@ -193,8 +196,35 @@ def secrets_env(admin_password: str, product_key: str) -> str:
 
 
 # ------------------------------------------------------------------ hookscript
+GUARD_TEMPLATE = "scripts/qm-native-9200/9200-gpu-guard.pl"  # from PR #24, proven on VM 9200
+
+
+class TemplateError(ValueError):
+    pass
+
+
+def _sub_once(text: str, old: str, new: str) -> str:
+    if text.count(old) != 1:
+        raise TemplateError(f"{GUARD_TEMPLATE}: expected exactly one {old!r} (found {text.count(old)}); "
+                            "the template changed, update plan.hookscript()")
+    return text.replace(old, new)
+
+
 def hookscript(template: str, vmid: str, gpu: Gpu) -> str:
-    funcs = " ".join(f.bdf for f in gpu.functions)
-    return (template.replace("@QAD_VMID@", vmid)
-            .replace("@QAD_GPU_FUNCS@", funcs)
-            .replace("@QAD_GPU_SLOT@", gpu.slot))
+    """Render PR #24's GPU-guard hookscript for this VMID and GPU.
+
+    The logic is used unchanged (refuse unless every function is on vfio-pci; reserve the PCI ids
+    via qemu-server's own reserve_pci_usage so a hostpci VM is refused while L1 runs, and vice
+    versa; release on post-stop). Only the hard-coded VMID and PCI ids are replaced, each of which
+    must occur exactly once, so a changed template fails loudly instead of rendering wrongly."""
+    ids = ", ".join(f"'{f.bdf}'" for f in gpu.functions)
+    out = _sub_once(template, "my @ids = ('0000:02:00.0', '0000:02:00.1');", f"my @ids = ({ids});")
+    out = _sub_once(out, "if ($vmid // '') ne '9200';", f"if ($vmid // '') ne '{vmid}';")
+    out = _sub_once(out, "for VM 9200 only (called for", f"for VM {vmid} only (called for")
+    out = out.replace("9200-gpu-guard: ", f"{vmid}-gpu-guard: ")
+    lines = out.split("\n")
+    if not lines[0].startswith("#!"):
+        raise TemplateError(f"{GUARD_TEMPLATE}: missing shebang")
+    lines.insert(1, f"# Rendered by setup.sh from {GUARD_TEMPLATE} for VM {vmid}, GPU {gpu.slot} "
+                    f"({len(gpu.functions)} functions). Only the VMID and the PCI ids differ from the template.")
+    return "\n".join(lines)

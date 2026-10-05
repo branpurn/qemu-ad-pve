@@ -1,7 +1,7 @@
 <#
   qemu-ad-pve setup: scheduled task (SYSTEM, at startup) registered by firstlogon.ps1.
   Installs the staged NVIDIA driver once the GPU is actually present (first boot under
-  qemu-ad-l2.service), reboots once, then removes itself. Log: C:\qad\gpu-driver.log
+  w10-l2.service), reboots once, then removes itself. Log: C:\qad\gpu-driver.log
   Silent flags (-s -noreboot -noeula -clean) are NVIDIA's documented installer switches;
   UNTESTED here.
 #>

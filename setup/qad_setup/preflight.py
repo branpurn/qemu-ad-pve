@@ -239,17 +239,22 @@ def evaluate(cfg: Config, s: Snapshot, vmid: Optional[str], gpu: Optional[hi.Gpu
         drv = gpu.drivers()
         if own_running:
             drv = {b: "vfio-pci" for b in drv}  # in use by our own running L1
-        bad = {b: d for b, d in drv.items() if d not in ("", "vfio-pci")}
-        disp_bad = [b for b in bad if any(f.bdf == b and f.cls.startswith("03") for f in gpu.functions)]
-        if not bad:
-            add(Check("GPU host driver", "PASS", ", ".join(f"{b.rsplit(':', 1)[1]}={d or 'none'}" for b, d in drv.items())))
-        elif disp_bad:
-            add(Check("GPU host driver", "FAIL", f"host driver in use: {bad}",
-                      "The host itself is using this GPU. Bind it to vfio-pci yourself (this tool does not change "
-                      "host modprobe config), or pick another GPU."))
+        not_vfio = {b: d for b, d in drv.items() if d != "vfio-pci"}
+        disp_host = [b for b, d in not_vfio.items() if d and any(f.bdf == b and f.cls.startswith("03")
+                                                                   for f in gpu.functions)]
+        if not not_vfio:
+            add(Check("GPU on vfio-pci", "PASS", ", ".join(f"{b.rsplit(':', 1)[1]}=vfio-pci" for b in drv)))
         else:
-            add(Check("GPU host driver", "WARN", f"non-display function(s) on a host driver: {bad}",
-                      "The hookscript rebinds them to vfio-pci at start, as qm does for hostpci."))
+            fix = ("The GPU guard (scripts/qm-native-9200) refuses `qm start` unless every function is on vfio-pci, and setup.sh "
+                   "does not change host driver config. Either start + shut down a VM that has this GPU as hostpci "
+                   "once (qm binds it to vfio-pci and leaves it there), bind it yourself until the next host reboot "
+                   "(for each function: echo vfio-pci > /sys/bus/pci/devices/<bdf>/driver_override; echo <bdf> > "
+                   "/sys/bus/pci/devices/<bdf>/driver/unbind; echo <bdf> > /sys/bus/pci/drivers_probe), or make it "
+                   "permanent with your own `options vfio-pci ids=...` in /etc/modprobe.d.")
+            if disp_host:
+                fix = "The HOST is using the display function; pick another GPU or free it first. " + fix
+            add(Check("GPU on vfio-pci", "FAIL", "not on vfio-pci: " + ", ".join(
+                f"{b.rsplit(':', 1)[1]}={d or 'no driver'}" for b, d in not_vfio.items()), fix))
         running = gpu.running_refs()
         if running:
             add(Check("GPU in use", "FAIL", "running VM(s) use it: " + ", ".join(f"{r.vmid} ({r.how})" for r in running),
@@ -257,7 +262,7 @@ def evaluate(cfg: Config, s: Snapshot, vmid: Optional[str], gpu: Optional[hi.Gpu
                       + ". setup.sh never stops other VMs."))
         elif gpu.refs:
             add(Check("GPU in use", "WARN", "stopped VM(s) also reference it: " + ", ".join(r.vmid for r in gpu.refs),
-                      "Only one of them can run at a time (the hookscript refuses to start L1 while one runs)."))
+                      "Only one can run at a time: with the GPU guard, qemu-server refuses whichever VM starts second."))
         else:
             add(Check("GPU in use", "PASS", "no other VM references it"))
     # ---- VMID
@@ -296,21 +301,16 @@ def evaluate(cfg: Config, s: Snapshot, vmid: Optional[str], gpu: Optional[hi.Gpu
     if cfg["l1.hookscript"] == "yes":
         snips = {x.name for x in s.storages.get("snippets", [])}
         if cfg["l1.snippets_storage"] not in snips:
-            add(Check("Hookscript storage", "FAIL", "no storage with content 'snippets'",
-                      "Set l1.hookscript=no, or enable 'snippets' on a storage yourself (Datacenter > Storage)."))
+            add(Check("GPU-guard hookscript", "FAIL", "no existing storage has content 'snippets'",
+                      "setup.sh does not change storage.cfg. Enable 'snippets' on a storage yourself (Datacenter > "
+                      "Storage > <storage> > Content) and re-run, or set l1.hookscript=no (NOT recommended: then "
+                      "nothing stops a hostpci VM from taking the GPU while L1 runs)."))
         else:
-            add(Check("Hookscript storage", "PASS", cfg["l1.snippets_storage"]))
-    elif cfg["l1.hookscript"] == "no":
-        not_vfio = [f.bdf for f in (gpu.functions if gpu else []) if f.driver != "vfio-pci"]
-        if not_vfio and not own_running:
-            add(Check("Hookscript", "FAIL", "no snippets storage, so no pre-start hookscript; but "
-                      f"{', '.join(not_vfio)} not on vfio-pci, so `qm start` of an args:-passthrough VM would fail",
-                      "Enable 'snippets' on a storage yourself (e.g. Datacenter > Storage > local > Content, or "
-                      "`pvesm set local --content <current list>,snippets`), then re-run. setup.sh does not change "
-                      "storage.cfg."))
-        else:
-            add(Check("Hookscript", "WARN", "disabled: no GPU exclusivity guard / vfio bind at L1 start",
-                      "Works while the GPU stays on vfio-pci; after a host reboot it may be back on a host driver."))
+            add(Check("GPU-guard hookscript", "PASS", f"{cfg['l1.snippets_storage']}:snippets/"
+                      f"qad-l1-{vmid or '<vmid>'}-gpu-guard.pl (qm-native-9200 guard)"))
+    else:
+        add(Check("GPU-guard hookscript", "WARN", "disabled: qemu-server will not know L1 holds the GPU",
+                  "Another VM with this GPU as hostpci could start (and reset the GPU) while L1 runs."))
     # ---- bridge
     if s.bridges and cfg["l1.bridge"] not in s.bridges:
         add(Check("Bridge", "FAIL", f"{cfg['l1.bridge']} not found", "Choose one of: " + ", ".join(s.bridges)))

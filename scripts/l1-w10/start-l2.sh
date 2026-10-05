@@ -15,9 +15,11 @@ if [ -r "$QAD_L2_ENV" ]; then
 fi
 
 # Require patched kvm (default path). Override with ALLOW_STOCK_KVM=1 only for fallback tests.
-# KVM_PATCH_RE: extended regex the /sys/module/kvm/version string must match
-# (lab build kvm-patched/1.0 = "6.12.111-kvmpatch1"; dkms/ package kvm-l1 = "l1-dkms-0.1").
-KVM_PATCH_RE=${KVM_PATCH_RE:-kvmpatch}
+# KVM_PATCH_RE: extended regex the /sys/module/kvm/version string must match.
+# Canonical package: dkms/ (kvm-l1, "l1-dkms-0.1"); setup.sh writes KVM_PATCH_RE='l1-dkms'.
+# "kvmpatch" (the lab's legacy kvm-patched/1.0, "6.12.111-kvmpatch1") stays accepted by default
+# until VM 9200 is realigned to dkms/ (docs/SETUP.md).
+KVM_PATCH_RE=${KVM_PATCH_RE:-l1-dkms|kvmpatch}
 if [ "${ALLOW_STOCK_KVM:-0}" != "1" ]; then
   ver=$(cat /sys/module/kvm/version 2>/dev/null || echo none)
   file=$(modinfo -F filename kvm 2>/dev/null || echo none)

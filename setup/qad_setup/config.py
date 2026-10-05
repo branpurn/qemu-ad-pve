@@ -64,12 +64,14 @@ SCHEMA: List[Key] = [
     Key("l1", "qemu_ad", "auto", "qemu-ad-pve binary for L2: copy (host /opt/qemu-ad, read-only), build "
         "(qemu-ad-pve.sh build inside L1) or auto (copy if present on host, else build)", "choice",
         ("auto", "copy", "build")),
-    Key("l1", "hookscript", "auto", "Install a pre-start hookscript (GPU exclusivity + vfio-pci bind) "
-        "into a snippets storage: auto|yes|no", "choice", ("auto", "yes", "no")),
-    Key("l1", "snippets_storage", "auto", "Storage with content 'snippets' for the hookscript"),
+    Key("l1", "hookscript", "auto", "Install the GPU-guard hookscript from scripts/qm-native-9200 (refuses start unless the GPU is "
+        "on vfio-pci; reserves it via qemu-server so hostpci VMs are refused while L1 runs). auto = yes. "
+        "no = unprotected (not recommended)", "choice", ("auto", "yes", "no")),
+    Key("l1", "snippets_storage", "auto", "Existing storage with content 'snippets' for the hookscript "
+        "(setup.sh never changes storage.cfg)"),
     Key("l1", "onboot", "no", "Start L1 when the host boots (GPU is then taken from other VMs)", "bool"),
-    Key("l1", "shutdown_timeout", "300", "Seconds qm/host shutdown waits for L1 (L2 shuts down first)", "int",
-        minimum=60),
+    Key("l1", "shutdown_timeout", "240", "startup down= : seconds `qm shutdown`/host shutdown wait for L1 "
+        "(L2 ACPI wait 150 s < w10-l2.service TimeoutStopSec 180 s < this)", "int", minimum=200),
     # ---- GPU ------------------------------------------------------------------------
     Key("gpu", "slot", "auto", "Host PCI slot of the GPU, e.g. 0000:01:00 (all functions are passed)", "slot",
         prompt=True),

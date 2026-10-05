@@ -13,6 +13,10 @@ PVE host (stock, unchanged)
 > **Status: UNTESTED end to end.** Every piece is modelled on what the lab did by hand (docs/gpu-phase-*.md), but
 > `setup.sh` itself has only been exercised by unit tests, `--dry-run` against stub PVE commands, and shellcheck. It
 > has **not** been run on a PVE host, in an L1, or against Windows Setup. See [Tested vs untested](#tested-vs-untested).
+>
+> **Builds on PR #24 (`scripts/qm-native-9200/`)**, the lab's proven plain `qm start/shutdown 9200` setup. The L1 VM
+> config, the GPU-guard hookscript and the L1 `w10-l2.service` + `l2-service.sh` are taken from there (rendered for
+> your VMID/GPU, not copied by hand); see [Relation to qm-native-9200](#relation-to-qm-native-9200-pr-24).
 
 ## Quickstart
 
@@ -39,7 +43,12 @@ What you need before starting:
 * The GPU not in use by a **running** VM (preflight lists every VM that references it, via `hostpciN`, a resource mapping or `args:`; `setup.sh` never stops other VMs).
 * A Windows ISO in an `iso` storage (e.g. `local:iso/Win10_22H2_English_x64.iso`) **or** an existing Windows qcow2/raw that already boots on SATA/AHCI.
 * Optional offline payload for the L2 (it has **no internet**): the NVIDIA Windows driver `.exe`, a `python-3.x-amd64.exe`, a wheelhouse directory (e.g. from `scripts/l1-w10/fetch-win-wheels.py`), `OpenSSH-Win64.zip` (only if the Windows image lacks the OpenSSH capability). Nothing proprietary is downloaded unless you pass `--download-proprietary` **and** list URLs with SHA-256 in `stage.downloads`.
-* A storage with `snippets` content for the hookscript (see [Assumptions](#defaults-and-assumptions)); without it, preflight FAILs if the GPU is not already on `vfio-pci`.
+* **Every GPU function already on `vfio-pci`** on the host (preflight FAILs otherwise and prints three ways to get
+  there; `setup.sh` never binds drivers or changes host modprobe config). On a host where a `hostpci` VM used the GPU
+  once, this is already the case.
+* An **existing** storage with `snippets` content for the GPU-guard hookscript (preflight FAILs otherwise;
+  `setup.sh` never changes `storage.cfg`; enable it yourself under Datacenter → Storage → Content, or set
+  `l1.hookscript=no` to run unprotected).
 
 ## The UX flow
 
@@ -59,7 +68,7 @@ What you need before starting:
    | `host_dirs`, `ssh_key` | host | `/var/lib/qemu-ad/setup/{ssh,cache,logs}`, dedicated ed25519 key (only used for L1) |
    | `debian_image` | host | download `debian-13-generic-amd64.qcow2` + `SHA512SUMS`, verify (or use `l1.debian_image`) |
    | `seed_iso` | host | NoCloud seed ISO `qad-l1-<vmid>-seed.iso` in the iso storage (root SSH key, qemu-guest-agent, optional static IP) |
-   | `hookscript` | host | `qad-l1-<vmid>-hook.sh` in the snippets storage (pre-start: refuse if another running VM uses the GPU; bind functions to vfio-pci like qm does for hostpci; refuse if the host uses the display function) |
+   | `hookscript` | host | `qad-l1-<vmid>-gpu-guard.pl` in the snippets storage: `scripts/qm-native-9200/9200-gpu-guard.pl` rendered for your VMID and GPU functions (only the VMID and the `@ids` line change). pre-start refuses unless every function is on `vfio-pci`, then takes a qemu-server PCI reservation so a `hostpci` VM is refused while L1 runs; post-stop releases it. It never binds drivers |
    | `vm_create` | host | `qm create` (see below) + `qm disk resize` + Windows disk + Windows ISO as `ide0` |
    | `vm_start` | host | `qm start <vmid>` (re-checks that no running VM uses the GPU) |
    | `l1_ip` | host | IP via `qm guest cmd network-get-interfaces`; L1's SSH host key read through the guest agent and pinned (no trust-on-first-use) |
@@ -69,11 +78,11 @@ What you need before starting:
    | `l1_dkms` | L1 | patched KVM via `dkms/` (`l1.kvm_source=debian`: `arch/x86/kvm` + `virt/kvm` from the matching Debian `linux-source`, like the lab build; `upstream`: `dkms/fetch-kvm-source.sh`), modules-load, check that `modinfo kvm` resolves to `updates/dkms` |
    | `l1_qemu_ad` | L1 | `copy`: read-only `tar` of the host's `/opt/qemu-ad` into L1 (the lab method, docs/gpu-phase-patched-kvm-l1.md); `build`: `qemu-ad-pve.sh build` in L1 (new subcommand: deps, fetch, patch, build; no divert/wrapper) |
    | `l1_vfio` | L1 | `vfio-pci ids=<GPU ids>` + softdeps, initramfs |
-   | `l1_scripts` | L1 | `/root/w10` (start-l2.sh, resolve-windows-disk.sh, stop-l2.sh, l2net-up/down.sh, qad-qmp.py), `OVMF_CODE.fd`, `/etc/qemu-ad-l2.env`, `qemu-ad-l2.service` (installed, not enabled yet) |
+   | `l1_scripts` | L1 | `/root/w10` (start-l2.sh, resolve-windows-disk.sh, l2net-up/down.sh, qad-qmp.py, and `l2-service.sh` from `scripts/qm-native-9200`), `OVMF_CODE.fd`, `/etc/qemu-ad-l2.env`, `w10-l2.service` from `scripts/qm-native-9200` (installed, not enabled yet). Both are copied verbatim when the L1 GPU address is the lab's `02:01.0/.1`; otherwise only the GPU BDF list and the `ConditionPathExists` path are adapted |
    | `l1_reboot` | L1 | reboot and prove: kvm version matches the patched build, from `updates/dkms`, DMAR present, GPU on vfio-pci |
    | `l2_stage` | L1 | `stage.iso` (label QADSTAGE: `\qad\firstlogon.ps1`, `gpu-driver.ps1`, your files, `authorized_keys`) and `autounattend.iso` |
    | `l2_install` | L1 | Windows install/first boot **without the GPU** under qemu-ad-pve (systemd-run unit `qemu-ad-l2-install`, survives a disconnect); builds `VARS.fd` without the GPU. Progress is polled; the VNC hint (`ssh -L` to L1, display on 127.0.0.1 only) is printed |
-   | `l2_enable` | L1 | delete `autounattend.iso` (holds the password), enable + start `qemu-ad-l2.service` (GPU) |
+   | `l2_enable` | L1 | delete `autounattend.iso` (holds the password), enable + start `w10-l2.service` (GPU) |
    | `verify` | L1→L2 | patched KVM, L2 running, GPU `ConfigManagerErrorCode` 0 over SSH into Windows, optional PyTorch CUDA check |
 
 5. **Summary**: colourised step table, the generated Windows admin password (printed once; also root-only in
@@ -91,15 +100,40 @@ Other subcommands:
 | --- | --- |
 | VM `<vmid>` (tag `qemu-ad-pve`, description starts with `qemu-ad-pve-setup:<install-id>`), its EFI disk, L1 disk (`scsi0`, imported from the Debian image) and Windows disk (`scsi1`, new or imported from your image) | `qm destroy <vmid> --purge 1 --destroy-unreferenced-disks 1`, **only if the marker is still in the description** |
 | `<iso-storage>:iso/qad-l1-<vmid>-seed.iso` | `pvesm free`, only if unchanged (sha256) |
-| `<snippets-storage>:snippets/qad-l1-<vmid>-hook.sh` (if a snippets storage exists) | `pvesm free`, only if unchanged |
+| `<snippets-storage>:snippets/qad-l1-<vmid>-gpu-guard.pl` (unless `l1.hookscript=no`) | `pvesm free`, only if unchanged |
 | `/var/lib/qemu-ad/manifest.json`, `/var/lib/qemu-ad/setup/` (state.json, config.ini *without secrets*, logs, ssh key + pinned known_hosts, Debian image cache) | `rm` of the listed files (sha256-checked where recorded), then `rmdir` of directories setup created, only if empty |
 
-The VM config itself carries `args:` with `-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=65536` and the GPU topology
-(`pcie-pci-bridge,id=gpubr,bus=ich9-pcie-port-1` + one `vfio-pci,host=…,bus=gpubr,addr=0x1.N` per function, the
-first with `multifunction=on`), `machine: q35,viommu=intel` (qm then emits `intel-iommu,intremap=on,caching-mode=on`
-and `kernel-irqchip=split`), `bios: ovmf`, `efidisk0: …,efitype=4m,pre-enrolled-keys=0` (Secure Boot off, so the
-unsigned DKMS modules load), `cpu: host`, `balloon: 0`, `scsihw: virtio-scsi-single`, `agent: 1`, `serial0: socket`,
-`onboot: 0` (configurable), `startup: down=300`.
+The VM config uses the same shape as the lab's proven `samples/qm-native-9200/9200.conf.active-final`:
+
+* `machine: q35,viommu=intel`: PVE itself adds `intel-iommu,intremap=on,caching-mode=on` and `kernel-irqchip=split`
+  (no hand-written `intel-iommu` in `args:`).
+* `args:` holds **only** the GPU topology and the OVMF aperture, in #24's order and with #24's ids:
+  `-device pcie-pci-bridge,id=gpubr,bus=ich9-pcie-port-1,addr=0x0
+  -device vfio-pci,host=<slot>.0,id=gpu-vga,bus=gpubr,addr=0x1.0,multifunction=on
+  -device vfio-pci,host=<slot>.1,id=gpu-audio,bus=gpubr,addr=0x1.1
+  -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=65536` (further functions get `id=gpu-fnN`).
+* **No `hostpciN`** (qm-native GPU topology fails with "group used in multiple address spaces",
+  docs/gpu-phase-intel-viommu.md); the hookscript provides the exclusivity `hostpci` would.
+* `hookscript: <snippets>:snippets/qad-l1-<vmid>-gpu-guard.pl`, `startup: down=240`, `onboot: 0`.
+* `bios: ovmf`, `efidisk0: …,efitype=4m,pre-enrolled-keys=0` (Secure Boot off, so the unsigned DKMS modules load),
+  `cpu: host`, `balloon: 0`, `scsihw: virtio-scsi-single`, `agent: 1`, `serial0: socket`.
+
+## Use Shutdown, not Stop
+
+Once installed, L1 is driven exactly like 9200 in docs/gpu-phase-qm-native-9200.md:
+
+* **Start**: `qm start <vmid>` or the GUI *Start* button. L1 boots and `w10-l2.service` starts the Windows L2 with the GPU.
+* **Stop**: `qm shutdown <vmid>` or the GUI **Shutdown** button. L1 runs `w10-l2.service`'s `ExecStop`
+  (`l2-service.sh stop`: ACPI `system_powerdown` to Windows over QMP, waits up to 150 s), then powers off; PVE waits
+  up to `startup: down=240` s. Host shutdown/reboot uses the same path.
+* **Never `qm stop` / GUI *Stop*** except as a last resort: it is a hard power cut of L1 **and** the Windows L2 inside it
+  (no Windows shutdown, so NTFS damage is possible and Windows may run a disk check on the next boot).
+* Only Windows: `systemctl stop w10-l2` / `systemctl start w10-l2` inside L1.
+
+Timeout chain: L2 ACPI wait 150 s (`L2_STOP_WAIT`) < `TimeoutStopSec=180` of `w10-l2.service` < `startup: down=240`
+(`l1.shutdown_timeout`, minimum 200). Difference from 9200: setup's L1 keeps `agent: 1` (it needs the guest agent for
+IP discovery and SSH host-key pinning), so `qm shutdown` asks the agent to power off instead of sending ACPI. Both end
+in a systemd poweroff that runs the same `ExecStop`; the agent path is **untested**.
 
 **Never touched:** host packages, kernel, kernel command line, modprobe/modules config, `/usr`, `/etc/pve/storage.cfg`,
 other VMs (not even stopped ones), the host's `/opt/qemu-ad` (only read), the host network config.
@@ -113,7 +147,7 @@ other VMs (not even stopped ones), the host's `/opt/qemu-ad` (only read), the ho
 
 * The plan comes only from the manifest. A VM is destroyed only if its description still has the install marker
   (a reused VMID is never touched, not even with `--force`). A running L1 gets `qm shutdown --timeout <l1.shutdown_timeout> --forceStop 1`
-  first (L1 shuts the L2 down via ACPI through `qemu-ad-l2.service`).
+  first (L1 shuts the L2 down via ACPI through `w10-l2.service`; the force stop happens only after the timeout).
 * Files that changed since setup wrote them are skipped unless `--force`.
 * If anything fails, the manifest is kept, so `uninstall` can be re-run.
 * `qm destroy … --purge` also removes the VM from backup jobs/HA/replication, which is what a full rollback wants. The Windows disk is
@@ -125,9 +159,11 @@ other VMs (not even stopped ones), the host's `/opt/qemu-ad` (only read), the ho
 | Symptom | What to do |
 | --- | --- |
 | Preflight `GPU in use` FAIL | `qm shutdown <vmid>` of the listed VM (setup never stops VMs for you). Only one VM can use the GPU at a time. |
-| Preflight `GPU host driver` FAIL | The host itself drives the display function (e.g. `nvidia`/`amdgpu`/`nouveau`). Bind it to `vfio-pci` yourself or pick another GPU. |
-| Preflight `Hookscript` FAIL | No storage has `snippets` content and the GPU is not on `vfio-pci`. Enable snippets (Datacenter → Storage → local → Content) and re-run. |
-| `vm_start` fails with a vfio error | `journalctl -u pvedaemon`/the task log; check `readlink /sys/bus/pci/devices/<bdf>/driver` for every GPU function, and the hookscript output in the task log. `qm start` with the GPU only in `args:` is the main **untested** assumption (the lab started L1 from a generated script, see docs/gpu-phase-gen-launch-e2e.md); fallback: `tools/gen-launch.py`. |
+| Preflight `GPU on vfio-pci` FAIL | A GPU function is on a host driver (or none). If it is the display function and the host uses it (`nvidia`/`amdgpu`/`nouveau`), pick another GPU. Otherwise, any of: start and **shut down** once a VM that has the GPU as `hostpciN` (qm binds it and leaves it on vfio-pci); `echo vfio-pci > /sys/bus/pci/devices/<bdf>/driver_override` + unbind + `drivers_probe` (runtime only); or your own `vfio-pci ids=` modprobe config. setup.sh does none of these for you. |
+| Preflight `GPU-guard hookscript` FAIL | No storage has `snippets` content. Enable it yourself (Datacenter → Storage → local → Content → Snippets) and re-run, or `--set l1.hookscript=no` (WARN: then nothing stops a `hostpci` VM from grabbing the GPU while L1 runs). |
+| `qm start` refused with `<vmid>-gpu-guard: …` | The task log says which function is not on vfio-pci, or which VM holds the reservation. Shut that VM down (Shutdown, not Stop). |
+| `vm_start` fails with a vfio error | `journalctl -u pvedaemon`/the task log; check `readlink /sys/bus/pci/devices/<bdf>/driver` for every GPU function. The same config shape boots 9200 in the lab (docs/gpu-phase-qm-native-9200.md); fallback: `tools/gen-launch.py`. |
+| L2 does not start after L1 boots | In L1: `systemctl status w10-l2`, `journalctl -u w10-l2`, `/root/w10/l2-service.log`. |
 | `l1_ip` times out | `qm terminal <vmid>` (serial console) to watch cloud-init; check DHCP on `l1.bridge` or set `l1.ip`/`l1.gateway`. |
 | `l1_dkms` fails | `ssh -i /var/lib/qemu-ad/setup/ssh/id_ed25519 root@<L1>`; log `/var/log/qemu-ad-setup/dkms.log`. Try `--set l1.kvm_source=upstream --redo l1_dkms`. |
 | `l1_reboot` check fails | `qad-l1.sh check-kvm` in L1 prints `KVM_VERSION`, `KVM_FILE`, `DMAR`, GPU driver/group. |
@@ -141,19 +177,28 @@ Logs: host `/var/lib/qemu-ad/setup/logs/install-*.log` (secrets redacted); L1 `/
 
 Assumptions (please review):
 
-1. **GPU via `args:`, not `hostpciN`** (qm-native topology fails with "group used in multiple address spaces",
-   docs/gpu-phase-intel-viommu.md). `ich9-pcie-port-1` exists on every q35 VM (qemu-server's `pve-q35-4.0.cfg`).
-   Because qm does not know about the device, the **hookscript** does what qm would do for hostpci (bind to vfio-pci) and
-   adds a GPU-exclusivity guard. This is also the item another work stream (`qm start/shutdown 9200` drives the stack) is
-   addressing; the two should be consolidated.
-2. **Snippets**: PVE's `local` storage does not have `snippets` content by default. `setup.sh` will not enable it
-   (that is a `storage.cfg` change outside the allowed host changes); it installs the hookscript only where snippets
-   already exist.
+Decisions (Brandon's defaults, now built in):
+
+* **One patched KVM package**: `dkms/` (`kvm-l1`, `l1-dkms-0.1`) is the canonical one; setup's L1 refuses to build it
+  if another kvm DKMS package (e.g. the lab's `kvm-patched`) is registered. See
+  [Aligning the lab's kvm-patched/1.0](#aligning-the-labs-kvm-patched10-to-dkms).
+* **No `storage.cfg` changes**: snippets must already exist.
+* **Windows key**: your own product key or none.
+* **Isolated L2 network**: `brl2` in L1, no NAT/internet for the L2.
+* **Sizes**: L1 12 GiB / 8 vCPU / 48 GiB disk; L2 6 GiB / 4 vCPU / 128 GiB.
+* **L1 `onboot: 0`**: not started with the host.
+
+Assumptions:
+
+1. **GPU via `args:`, not `hostpciN`**, exactly as 9200 (PR #24). `ich9-pcie-port-1` exists on every q35 VM
+   (qemu-server's `pve-q35-4.0.cfg`). qm does not bind drivers for `args:` devices, so the GPU must already be on
+   vfio-pci (preflight), and the #24 guard hookscript supplies the exclusivity.
+2. **Snippets**: PVE's `local` storage does not have `snippets` content by default; `setup.sh` will not enable it.
 3. **L1 image**: Debian 13 *generic* (standard kernel, like the lab's `6.12.x+deb13-amd64`), not *genericcloud*.
 4. **Patched KVM**: the repo's `dkms/` package (`kvm-l1`, version string `l1-dkms-0.1`) built from the Debian
-   `linux-source` of the running L1 kernel by default. The lab ran `kvm-patched/1.0` (`6.12.111-kvmpatch1`);
-   the start guard accepts both (`KVM_PATCH_RE='l1-dkms|kvmpatch'`). The kernel is `apt-mark hold`-ed because
-   `dkms.conf` has `AUTOINSTALL=no`.
+   `linux-source` of the running L1 kernel by default. setup's L1 sets `KVM_PATCH_RE='l1-dkms'`; `start-l2.sh`'s
+   built-in default still also accepts the lab's `kvmpatch` until 9200 is realigned (below). The kernel is
+   `apt-mark hold`-ed because `dkms.conf` has `AUTOINSTALL=no`.
 5. **qemu-ad-pve**: copied read-only from the host's `/opt/qemu-ad` when present (exactly the lab method; PVE 9 and
    Debian 13 share the userland), else built in L1 with `qemu-ad-pve.sh build`. It has no SLIRP, so the L2 network is
    an isolated `brl2` bridge in L1 (`10.254.77.0/24`, dnsmasq with a fixed lease for the L2 MAC, **no NAT/internet**).
@@ -170,7 +215,45 @@ Assumptions (please review):
    = shutdown (clean ACPI stop), enables OpenSSH (capability or staged zip) with the setup key, installs Python + wheels
    offline into `C:\qad\venv`, registers a one-shot task that installs the NVIDIA driver at the first boot that sees
    the GPU, then shuts down.
-10. **L1 sizing**: 12 GiB / 8 vCPU / 48 GiB disk; L2 6 GiB / 4 vCPU / 128 GiB (lab values except disk sizes).
+10. **Shutdown via the guest agent** (`agent: 1`, see [Use Shutdown, not Stop](#use-shutdown-not-stop)).
+
+## Aligning the lab's kvm-patched/1.0 to dkms/
+
+The lab L1 (9200) runs the older `kvm-patched/1.0` DKMS package (`6.12.111-kvmpatch1`, `patch_tag` on `kvm_amd`);
+`dkms/` is now the single canonical package (`build_tag` `l1-dkms-0.1` on `kvm`). To move 9200 over (inside L1, with
+a maintenance window; nothing on the PVE host changes):
+
+```bash
+systemctl stop w10-l2                         # clean Windows shutdown first
+dkms status                                   # note the kvm-patched/1.0 entry
+dkms remove -m kvm-patched -v 1.0 --all && mv /usr/src/kvm-patched-1.0 /root/kvm-patched-1.0.bak
+# copy this repo to /root/qemu-ad-pve, then either (setup.env as written by setup.sh, l1.kvm_source=debian):
+/root/qemu-ad-pve/setup/l1/qad-l1.sh dkms
+# or by hand: stage the sources and run dkms/scripts/l1-dkms.sh (see dkms/README.md)
+reboot
+cat /sys/module/kvm/version                   # expect l1-dkms-0.1
+modinfo -F filename kvm                       # expect …/updates/dkms/…
+sed -i "s/^KVM_PATCH_RE=.*/KVM_PATCH_RE='l1-dkms'/" /etc/qemu-ad-l2.env   # add the line if missing
+systemctl start w10-l2                        # start-l2.sh refuses to start if the patched KVM is not loaded
+```
+
+Rollback: `dkms remove -m kvm-l1 -v 0.1.0 --all`, `mv /root/kvm-patched-1.0.bak /usr/src/kvm-patched-1.0`,
+`dkms install -m kvm-patched -v 1.0`, reboot, and put `kvmpatch` back into `KVM_PATCH_RE`. The tags differ:
+kvm-patched exposes `patch_tag` on `kvm_amd`, dkms/ exposes `build_tag` on `kvm`. This procedure is **untested** on 9200.
+
+## Relation to qm-native-9200 (PR #24)
+
+PR #24 proved the plain `qm start/shutdown 9200` stack live. setup.sh reuses it instead of duplicating it:
+
+| From #24 | Used by setup.sh as |
+| --- | --- |
+| `samples/qm-native-9200/9200.conf.active-final` VM shape | the `qm create` arguments and `args:` (a unit test asserts the generated `args:` equals the sample's apart from host BDFs) |
+| `scripts/qm-native-9200/9200-gpu-guard.pl` | rendered to `qad-l1-<vmid>-gpu-guard.pl` (VMID + `@ids` only; rendering fails if the template changes shape) |
+| `scripts/qm-native-9200/w10-l2.service`, `l2-service.sh` | installed in L1 (adapted only when the L1 GPU BDFs differ) |
+| docs/gpu-phase-qm-native-9200.md | the Shutdown-not-Stop rules above |
+
+PR #23 (this tool) contains #24 through a merge commit. Merge #24 first; #23's diff then shrinks to setup.sh's own
+changes.
 
 All settings (`setup/config.example.ini` has the same list with comments):
 
@@ -192,10 +275,10 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | `l1.hold_kernel` | `yes` | apt-mark hold the L1 kernel (DKMS AUTOINSTALL is off in dkms/) |
 | `l1.kvm_source` | `debian` | Source for the patched KVM: debian (linux-source of the L1 kernel, like the lab build) or upstream (dkms/fetch-kvm-source.sh) |
 | `l1.qemu_ad` | `auto` | qemu-ad-pve binary for L2: copy (host /opt/qemu-ad, read-only), build (qemu-ad-pve.sh build inside L1) or auto (copy if present on host, else build) |
-| `l1.hookscript` | `auto` | Install a pre-start hookscript (GPU exclusivity + vfio-pci bind) into a snippets storage: auto/yes/no |
-| `l1.snippets_storage` | `auto` | Storage with content 'snippets' for the hookscript |
+| `l1.hookscript` | `auto` | Install the GPU-guard hookscript from scripts/qm-native-9200 (refuses start unless the GPU is on vfio-pci; reserves it via qemu-server so hostpci VMs are refused while L1 runs). auto = yes. no = unprotected (not recommended) |
+| `l1.snippets_storage` | `auto` | Existing storage with content 'snippets' for the hookscript (setup.sh never changes storage.cfg) |
 | `l1.onboot` | `no` | Start L1 when the host boots (GPU is then taken from other VMs) |
-| `l1.shutdown_timeout` | `300` | Seconds qm/host shutdown waits for L1 (L2 shuts down first) |
+| `l1.shutdown_timeout` | `240` | startup down= : seconds `qm shutdown`/host shutdown wait for L1 (L2 ACPI wait 150 s < w10-l2.service TimeoutStopSec 180 s < this); minimum 200 |
 | `gpu.slot` | `auto` | Host PCI slot of the GPU, e.g. 0000:01:00 (all functions are passed) (asked interactively) |
 | `gpu.mmio64_mb` | `65536` | OVMF 64-bit MMIO aperture (X-PciMmio64Mb) for L1 and L2 |
 | `l2.source` | `iso` | How to create the Windows L2: iso (install from a Windows ISO), image (existing qcow2/raw), none (L1 only) (asked interactively) |
@@ -232,11 +315,11 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | Config parsing/validation, GPU/IOMMU/VM-reference parsing (lspci, sysfs, `qm list`, `pvesm status`, mappings, guest-agent JSON), preflight rules, `qm` command and `args:` generation, cloud-init, L1 env file, manifest + uninstall planning, autounattend XML well-formedness/escaping, step resume logic | unit-tested (`tests/setup`, CI on Python 3.9 and 3.13) |
 | `setup.sh install --dry-run`, `preflight`, `uninstall --dry-run` | smoke-tested against stub `qm`/`pvesm`/`pvesh`/`lspci` and a fake sysfs |
 | `resolve-windows-disk.sh` blank-disk mode and refusals | tested against stub `lsblk`/`udevadm`/`wipefs` |
-| All shell (setup.sh, setup/l1, hookscript, scripts/l1-w10, dkms) | shellcheck clean; PowerShell files parse (pwsh parser only) |
-| `qm start` of an L1 with the GPU only in `args:` | **untested** (the lab used a generated launch script) |
-| Hookscript on a real host | **untested** |
+| Rendering of #24's guard hookscript; adaptation of #24's `w10-l2.service`/`l2-service.sh` to other GPU BDFs | unit-tested (the bash function is extracted from `qad-l1.sh` and run) |
+| All shell (setup.sh, setup/l1, scripts/l1-w10, scripts/qm-native-9200, dkms) | shellcheck clean; PowerShell files parse (pwsh parser only) |
+| `qm start`/`qm shutdown` of this VM shape + guard hookscript + `w10-l2.service` | **proven live on 9200 (PR #24)**; untested as generated by setup.sh, with another VMID/GPU, and via the guest-agent shutdown path |
 | cloud-init seed, guest-agent IP + host-key pinning | **untested** |
-| `dkms/` (`kvm-l1`) build in a real L1, Debian `linux-source` staging | **untested** (the lab used `kvm-patched/1.0`) |
+| `dkms/` (`kvm-l1`) build in a real L1, Debian `linux-source` staging, the kvm-patched → dkms/ realignment | **untested** (the lab used `kvm-patched/1.0`) |
 | `qemu-ad-pve.sh build` inside L1 | **untested** (the `install` path it reuses is the tested one) |
 | Windows unattended install, sendkey boot, OpenSSH/Python/NVIDIA offline installs, image source, Windows 11 | **untested** |
 | Intel hosts | **untested** (lab: AMD 7950X) |

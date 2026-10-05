@@ -13,7 +13,10 @@ ENVF=${QAD_ENV:-/etc/qemu-ad/setup.env}
 W=/root/w10
 STAGE=/root/qad-stage
 LOGDIR=/var/log/qemu-ad-setup
-KVM_PATCH_RE='l1-dkms|kvmpatch'
+# dkms/ (kvm-l1, MODULE_VERSION "l1-dkms-0.1") is the ONE canonical patched KVM package.
+KVM_PATCH_RE='l1-dkms'
+L2_UNIT=w10-l2.service  # PR #24's unit (scripts/qm-native-9200/), reused verbatim
+LAB_L1_GPU='0000:02:01.0 0000:02:01.1'  # GPU BDFs hard-coded in PR #24's unit/helper
 DKMS_NAME=kvm-l1
 DKMS_VER=0.1.0
 
@@ -48,7 +51,7 @@ step_packages() {
   apt-get install -y linux-image-amd64 linux-headers-amd64
   apt-get install -y --no-install-recommends \
     dkms build-essential pahole git ca-certificates xz-utils patch kmod pciutils \
-    ovmf dnsmasq-base genisoimage python3 qemu-system-x86 qemu-utils wget openssh-client
+    ovmf dnsmasq-base genisoimage python3 qemu-system-x86 qemu-utils wget openssh-client socat
   local newest
   newest=$(dpkg-query -W -f='${Depends}' linux-image-amd64 | grep -o 'linux-image-[0-9][^ ,]*' | head -1 | sed 's/^linux-image-//')
   apt-get install -y "linux-headers-$(uname -r)" || true
@@ -111,6 +114,11 @@ step_dkms() {
   else
     say "source already staged: $src"
   fi
+  # Single patched KVM package: refuse if another DKMS package (e.g. the lab's kvm-patched/1.0)
+  # also ships kvm modules; docs/SETUP.md "Aligning the lab's kvm-patched/1.0" shows how to switch.
+  local other
+  other=$(dkms status 2>/dev/null | awk -F'[/,: ]+' '{print $1"/"$2}' | grep -v "^$DKMS_NAME/" | grep -i kvm || true)
+  [ -z "$other" ] || die "another patched-KVM DKMS package is registered ($other); remove it first (docs/SETUP.md)"
   st=$(dkms status "$DKMS_NAME/$DKMS_VER" -k "$kver" 2>/dev/null || true)
   if printf '%s' "$st" | grep -q installed; then
     say "DKMS $DKMS_NAME/$DKMS_VER already installed for $kver"
@@ -171,7 +179,7 @@ step_scripts() {
   install -d -m 700 "$W" /root/l2
   install -m 755 "$REPO/scripts/l1-w10/start-l2.sh" "$REPO/scripts/l1-w10/resolve-windows-disk.sh" \
     "$REPO/scripts/l1-w10/mk-wheel-iso.sh" "$REPO/setup/l1/l2net-up.sh" "$REPO/setup/l1/l2net-down.sh" \
-    "$REPO/setup/l1/stop-l2.sh" "$REPO/setup/l1/qad-qmp.py" "$REPO/tests/w10-code43-run.sh" "$W/"
+    "$REPO/setup/l1/qad-qmp.py" "$REPO/tests/w10-code43-run.sh" "$W/"
   install -m 644 "$REPO/tests/w10-code43-check.ps1" "$W/"
   [ -f /root/l2/OVMF_CODE.fd ] || install -m 644 /usr/share/OVMF/OVMF_CODE_4M.fd /root/l2/OVMF_CODE.fd
   [ -f "$W/l2_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "qad-l1-to-l2" -f "$W/l2_ed25519"
@@ -197,9 +205,33 @@ L2_DHCP_START=$QAD_L2_DHCP_START
 L2_DHCP_END=$QAD_L2_DHCP_END
 EXTRA="$extra"
 CONF
-  install -m 644 "$REPO/setup/l1/qemu-ad-l2.service" /etc/systemd/system/qemu-ad-l2.service
+  install_l2_unit
   systemctl daemon-reload
-  say "scripts in $W, settings /etc/qemu-ad-l2.env, unit qemu-ad-l2.service (enabled later)"
+  say "scripts in $W, settings /etc/qemu-ad-l2.env, unit $L2_UNIT (enabled later)"
+}
+
+# PR #24's L1 autostart unit + helper (ACPI power-down of the L2 on L1 shutdown), reused as-is.
+# They hard-code the lab's L1 GPU address 02:01.0/.1; if this L1 enumerates the GPU elsewhere,
+# exactly those strings are replaced (and the replacement is checked), nothing else.
+install_l2_unit() {
+  local src="$REPO/scripts/qm-native-9200" bdfs first tmp
+  if [ ! -f "$src/w10-l2.service" ] || [ ! -f "$src/l2-service.sh" ]; then die "missing $src (qm-native-9200 files)"; fi
+  bdfs=$(gpu_bdfs | tr '\n' ' ' | sed 's/ $//') || die "cannot resolve the GPU functions ($QAD_GPU_IDS) in L1"
+  first=${bdfs%% *}
+  tmp=$(mktemp -d)
+  cp "$src/l2-service.sh" "$src/w10-l2.service" "$tmp/"
+  if [ "$bdfs" != "$LAB_L1_GPU" ]; then
+    say "L1 GPU is at '$bdfs' (qm-native-9200 files assume '$LAB_L1_GPU'): adapting those strings only"
+    grep -qF "for d in $LAB_L1_GPU; do" "$tmp/l2-service.sh" || die "l2-service.sh changed upstream; cannot adapt"
+    grep -qxF "ConditionPathExists=/sys/bus/pci/devices/0000:02:01.0" "$tmp/w10-l2.service" \
+      || die "w10-l2.service changed upstream; cannot adapt"
+    sed -i "s|for d in $LAB_L1_GPU; do|for d in $bdfs; do|; s|GPU 02:01.0/.1|GPU $bdfs|" "$tmp/l2-service.sh"
+    sed -i "s|^ConditionPathExists=/sys/bus/pci/devices/0000:02:01.0$|ConditionPathExists=/sys/bus/pci/devices/$first|" \
+      "$tmp/w10-l2.service"
+  fi
+  install -m 755 "$tmp/l2-service.sh" "$W/l2-service.sh"
+  install -m 644 "$tmp/w10-l2.service" "/etc/systemd/system/$L2_UNIT"
+  rm -rf "$tmp"
 }
 
 # ------------------------------------------------------------------ checks after reboot
@@ -315,7 +347,7 @@ find_win_cd() { # the Windows ISO is attached to L1 as a CD; find it by its volu
 step_l2_install() {
   if systemctl is-active --quiet qemu-ad-l2-install; then say "install already running"; return 0; fi
   if [ -f "$W/install.state" ] && grep -qx DONE "$W/install.state"; then say "L2 already created"; return 0; fi
-  systemctl is-active --quiet qemu-ad-l2 && die "qemu-ad-l2.service is running; refusing to install over it"
+  systemctl is-active --quiet "$L2_UNIT" && die "$L2_UNIT is running; refusing to install over it"
   systemctl reset-failed qemu-ad-l2-install 2>/dev/null || true
   local secs=$(( QAD_INSTALL_TIMEOUT_MIN * 60 ))
   echo RUNNING >"$W/install.state"
@@ -340,7 +372,7 @@ step_l2_wipe() {
   # Only for `setup.sh install --redo l2_install --wipe-l2-disk`: clear a half-installed Windows disk.
   # Target = the ONE disk whose serial is exactly drive-scsi1, never mounted / ext4 / root.
   systemctl is-active --quiet qemu-ad-l2-install && die "install unit still running"
-  systemctl is-active --quiet qemu-ad-l2 && die "qemu-ad-l2.service is running"
+  systemctl is-active --quiet "$L2_UNIT" && die "$L2_UNIT is running"
   local d serial hits=()
   for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
     serial=$(udevadm info --query=property --name="$d" 2>/dev/null | awk -F= '/^ID_SERIAL_SHORT=/{print $2}')
@@ -359,9 +391,9 @@ step_l2_wipe() {
 step_l2_enable() {
   [ -f "$W/VARS.fd" ] || die "no $W/VARS.fd (L2 not created yet)"
   rm -f "$W/autounattend.iso"  # contains the admin password; only needed during Setup
-  systemctl enable qemu-ad-l2.service
-  systemctl start qemu-ad-l2.service
-  systemctl --no-pager --lines=5 status qemu-ad-l2.service || true
+  systemctl enable "$L2_UNIT"
+  systemctl start "$L2_UNIT"
+  systemctl --no-pager --lines=5 status "$L2_UNIT" || true
 }
 
 # ------------------------------------------------------------------ verify / status
@@ -380,7 +412,7 @@ step_verify() {
   else
     echo "L2_RUNNING=no"; rc=1
   fi
-  echo "L2_SERVICE=$(systemctl is-active qemu-ad-l2.service || true) enabled=$(systemctl is-enabled qemu-ad-l2.service 2>/dev/null || true)"
+  echo "L2_SERVICE=$(systemctl is-active "$L2_UNIT" || true) enabled=$(systemctl is-enabled "$L2_UNIT" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     local out code
     out=$(W10_CHECK_PS1="$W/w10-code43-check.ps1" "$W/w10-code43-run.sh" "$QAD_L2_IP" "$QAD_ADMIN_USER" \
@@ -417,7 +449,7 @@ step_status() {
   echo "DKMS=$(dkms status "$DKMS_NAME" 2>/dev/null | tr '\n' ' ')"
   echo "QEMU_AD=$(/opt/qemu-ad/bin/qemu-system-x86_64 --version 2>/dev/null | head -1 || echo missing)"
   echo "INSTALL_STATE=$(cat "$W/install.state" 2>/dev/null || echo NONE)"
-  echo "L2_SERVICE=$(systemctl is-active qemu-ad-l2.service 2>/dev/null || true)"
+  echo "L2_SERVICE=$(systemctl is-active "$L2_UNIT" 2>/dev/null || true)"
   echo "L2_IP=$QAD_L2_IP"
 }
 

@@ -172,7 +172,7 @@ class App:
             if st:
                 cfg.set("l1.snippets_storage", st, explicit=False)
         if cfg.is_auto("l1.hookscript"):
-            cfg.set("l1.hookscript", "no" if cfg.is_auto("l1.snippets_storage") else "yes", explicit=False)
+            cfg.set("l1.hookscript", "yes", explicit=False)  # preflight FAILs if no snippets storage exists
         if cfg["l2.source"] == "iso" and not cfg["l2.windows_iso"]:
             isos = [f for f in _list_isos(self.runner, snap) if re.search(r"win", f, re.I)]
             if isos:
@@ -271,7 +271,7 @@ def planned_changes(cfg: Config, gpu: hi.Gpu, app: App) -> List[str]:
         out.append(f"  + Windows disk scsi1 imported (copied) from {cfg['l2.image']}")
     out.append(f"cloud-init seed ISO {cfg['l1.iso_storage']}:iso/qad-l1-{vmid}-seed.iso")
     if cfg["l1.hookscript"] == "yes":
-        out.append(f"hookscript {cfg['l1.snippets_storage']}:snippets/qad-l1-{vmid}-hook.sh")
+        out.append(f"GPU-guard hookscript (qm-native-9200) {cfg['l1.snippets_storage']}:snippets/qad-l1-{vmid}-gpu-guard.pl")
     if not cfg["l1.debian_image"]:
         out.append(f"Debian 13 cloud image cache in {app.setup_dir}/cache/ (~400 MiB)")
     out.append(f"{app.manifest_path} and {app.setup_dir}/ (state, config without secrets, logs, SSH key)")
@@ -436,7 +436,7 @@ def cmd_uninstall(app: App) -> int:
             e.get("volid") == volid and os.path.exists(e.get("path", "")) for e in m.entries)
 
     facts = HostFacts(vm_status, vm_desc, sha256_file, vol_exists)
-    cfg_timeout = 300
+    cfg_timeout = 240
     try:
         cfg_timeout = app.load_config().int("l1.shutdown_timeout")
     except (ConfigError, OSError):

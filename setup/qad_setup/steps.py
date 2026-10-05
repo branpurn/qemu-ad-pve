@@ -23,7 +23,7 @@ from .windows import autounattend, random_password
 L1_REPO = "/root/qemu-ad-pve"
 L1_QAD = f"{L1_REPO}/setup/l1/qad-l1.sh"
 PAYLOAD = ["dkms/Makefile", "dkms/dkms.conf", "dkms/fetch-kvm-source.sh", "dkms/patches", "dkms/scripts",
-           "dkms/README.md", "scripts/l1-w10", "setup/l1", "tests/w10-code43-check.ps1",
+           "dkms/README.md", "scripts/l1-w10", "scripts/qm-native-9200", "setup/l1", "tests/w10-code43-check.ps1",
            "tests/w10-code43-run.sh", "qemu-ad-pve.sh", "LICENSE"]
 
 
@@ -203,12 +203,12 @@ def s_seed_iso(c: Ctx) -> str:
 
 def s_hookscript(c: Ctx) -> str:
     if c.cfg["l1.hookscript"] != "yes":
-        raise _Skip("hookscript disabled (l1.hookscript=no / no snippets storage)")
+        raise _Skip("GPU guard disabled (l1.hookscript=no): nothing stops a hostpci VM from taking the GPU")
     volid = f"{c.cfg['l1.snippets_storage']}:snippets/{plan.hook_volname(c.vmid)}"
     path = _storage_path(c, volid)
-    tmpl = open(os.path.join(c.repo, "setup", "host", "qad-hookscript.sh"), encoding="utf-8").read()
+    tmpl = open(os.path.join(c.repo, plan.GUARD_TEMPLATE), encoding="utf-8").read()
     digest = c.runner.write_file(path, plan.hookscript(tmpl, c.vmid, c.gpu), mode=0o755,
-                                 desc="pre-start: GPU exclusivity + vfio-pci bind")
+                                 desc="qm-native-9200 GPU guard: vfio-pci check + qemu-server PCI reservation")
     if not c.dry:
         c.manifest.add("volume", volid=volid, path=path, sha256=digest)
     c.state.facts["hook_volid"] = volid
@@ -405,7 +405,7 @@ def s_l1_vfio(c: Ctx) -> str:
 
 def s_l1_scripts(c: Ctx) -> str:
     c.l1("scripts", timeout=600)
-    return "/root/w10 + qemu-ad-l2.service"
+    return "/root/w10 + w10-l2.service (qm-native-9200 unit, not enabled yet)"
 
 
 def s_l1_reboot(c: Ctx) -> str:
@@ -503,7 +503,7 @@ def s_l2_enable(c: Ctx) -> str:
     if c.cfg["l2.source"] == "none":
         raise _Skip("l2.source=none")
     c.l1("l2-enable", timeout=300)
-    return "qemu-ad-l2.service enabled + started (GPU)"
+    return "w10-l2.service (qm-native-9200) enabled + started (GPU)"
 
 
 def s_verify(c: Ctx) -> str:
@@ -550,7 +550,7 @@ STEPS: List[tuple] = [
     ("ssh_key", "SSH key for L1", s_ssh_key),
     ("debian_image", "Debian 13 cloud image", s_debian_image),
     ("seed_iso", "cloud-init seed ISO", s_seed_iso),
-    ("hookscript", "pre-start hookscript", s_hookscript),
+    ("hookscript", "GPU-guard hookscript (qm-native-9200)", s_hookscript),
     ("vm_create", "create L1 VM", s_vm_create),
     ("vm_start", "start L1", s_vm_start),
     ("l1_ip", "L1 address + host key", s_l1_ip),
@@ -560,7 +560,7 @@ STEPS: List[tuple] = [
     ("l1_dkms", "patched KVM (DKMS)", s_l1_dkms),
     ("l1_qemu_ad", "qemu-ad-pve binary in L1", s_l1_qemu_ad),
     ("l1_vfio", "vfio-pci for the GPU in L1", s_l1_vfio),
-    ("l1_scripts", "L2 launch scripts + service", s_l1_scripts),
+    ("l1_scripts", "L2 scripts + w10-l2.service", s_l1_scripts),
     ("l1_reboot", "reboot L1, prove defaults", s_l1_reboot),
     ("l2_stage", "staging ISO (+ autounattend)", s_l2_stage),
     ("l2_install", "create Windows L2 (no GPU)", s_l2_install),

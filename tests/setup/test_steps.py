@@ -96,3 +96,54 @@ def test_run_steps_resumes_and_records_failure(tmp_path, monkeypatch):
     calls.clear()
     steps.run_steps(c, redo=["a"])
     assert calls == ["a"]
+
+
+# ---------------------------------------------------------------- PR #24 unit reuse in L1
+import re as _re  # noqa: E402
+
+from conftest import REPO  # noqa: E402
+
+
+def _install_l2_unit(tmp_path, bdfs):
+    src = (REPO / "setup/l1/qad-l1.sh").read_text()
+    fn = _re.search(r"^install_l2_unit\(\) \{\n.*?^\}\n", src, _re.S | _re.M).group(0)
+    lab = _re.search(r"^LAB_L1_GPU='([^']*)'", src, _re.M).group(1)
+    w = tmp_path / "w10"
+    w.mkdir()
+    etc = tmp_path / "etc"
+    (etc / "systemd/system").mkdir(parents=True)
+    fn = fn.replace('"/etc/systemd/system/$L2_UNIT"', f'"{etc}/systemd/system/$L2_UNIT"')
+    script = f"""set -euo pipefail
+REPO={REPO}; W={w}; L2_UNIT=w10-l2.service; LAB_L1_GPU='{lab}'; QAD_GPU_IDS='10de:2704 10de:22bb'
+say() {{ echo "$*"; }}
+die() {{ echo "DIE $*" >&2; exit 1; }}
+gpu_bdfs() {{ printf '%s\\n' {' '.join(bdfs)}; }}
+{fn}
+install_l2_unit
+"""
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    unit = etc / "systemd/system/w10-l2.service"
+    helper = w / "l2-service.sh"
+    return p, (unit.read_text() if unit.exists() else ""), (helper.read_text() if helper.exists() else "")
+
+
+def test_pr24_unit_installed_verbatim_when_bdfs_match(tmp_path):
+    p, unit, helper = _install_l2_unit(tmp_path, ["0000:02:01.0", "0000:02:01.1"])
+    assert p.returncode == 0, p.stderr
+    assert unit == (REPO / "scripts/qm-native-9200/w10-l2.service").read_text()
+    assert helper == (REPO / "scripts/qm-native-9200/l2-service.sh").read_text()
+
+
+def test_pr24_unit_adapted_to_other_bdfs_only(tmp_path):
+    p, unit, helper = _install_l2_unit(tmp_path, ["0000:03:01.0", "0000:03:01.1"])
+    assert p.returncode == 0, p.stderr
+    orig_unit = (REPO / "scripts/qm-native-9200/w10-l2.service").read_text()
+    orig_helper = (REPO / "scripts/qm-native-9200/l2-service.sh").read_text()
+    assert "ConditionPathExists=/sys/bus/pci/devices/0000:03:01.0" in unit
+    code = [l for l in (unit + helper).splitlines() if not l.lstrip().startswith("#")]
+    assert not [l for l in code if "02:01" in l]
+    assert "for d in 0000:03:01.0 0000:03:01.1; do" in helper
+    # nothing else changed
+    assert len(unit.splitlines()) == len(orig_unit.splitlines())
+    diff = [(a, b) for a, b in zip(orig_helper.splitlines(), helper.splitlines()) if a != b]
+    assert len(diff) == 2

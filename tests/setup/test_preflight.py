@@ -49,7 +49,8 @@ def test_happy_path(tmp_path):
     assert not pf.failed(list(checks.values())), [c for c in checks.values() if c.status == "FAIL"]
     assert checks["GPU IOMMU group"].status == "PASS"
     assert checks["GPU in use"].status == "WARN"  # stopped VMs 100 and 9200 reference it
-    assert checks["GPU host driver"].status == "WARN"  # audio on snd_hda_intel, rebound by the hookscript
+    assert checks["GPU on vfio-pci"].status == "PASS"
+    assert checks["GPU-guard hookscript"].status == "PASS"
     assert checks["NVIDIA driver"].status == "WARN"
 
 
@@ -65,8 +66,20 @@ def test_gpu_in_use_by_running_vm_fails_and_ram_hint(tmp_path):
 def test_display_function_on_host_driver_fails(tmp_path):
     s = snapshot(tmp_path)
     checks = by_name(pf.evaluate(cfg(gpu__slot="0000:0e:00"), s, "9201", pf.pick_gpu(s, "0000:0e:00")))
-    assert checks["GPU host driver"].status == "FAIL"
+    assert checks["GPU on vfio-pci"].status == "FAIL"
+    assert checks["GPU on vfio-pci"].fix.startswith("The HOST is using the display function")
     assert checks["GPU in use"].status == "FAIL"  # VM 101 runs with it via a resource mapping
+
+
+def test_audio_function_not_on_vfio_fails_with_fix(tmp_path):
+    s = snapshot(tmp_path)
+    g = pf.pick_gpu(s, "0000:01:00")
+    g.functions[1].driver = "snd_hda_intel"
+    c = by_name(pf.evaluate(cfg(), s, "9201", g))["GPU on vfio-pci"]
+    assert c.status == "FAIL" and "00.1=snd_hda_intel" in c.detail
+    assert "driver_override" in c.fix and "does not change host driver config" in c.fix
+    g.functions[1].driver = ""
+    assert by_name(pf.evaluate(cfg(), s, "9201", g))["GPU on vfio-pci"].status == "FAIL"
 
 
 def test_vmid_taken_storage_missing_iso_missing(tmp_path):
@@ -80,15 +93,13 @@ def test_vmid_taken_storage_missing_iso_missing(tmp_path):
     assert checks["Windows ISO"].status == "FAIL"
 
 
-def test_no_hookscript_needs_vfio_bound_gpu(tmp_path):
+def test_guard_needs_existing_snippets_storage(tmp_path):
     s = snapshot(tmp_path)
-    c = cfg(l1__hookscript="no")
-    checks = by_name(pf.evaluate(c, s, "9201", pf.pick_gpu(s, "0000:01:00")))
-    assert checks["Hookscript"].status == "FAIL" and "snippets" in checks["Hookscript"].fix
-    for f in pf.pick_gpu(s, "0000:01:00").functions:
-        f.driver = "vfio-pci"
-    checks = by_name(pf.evaluate(c, s, "9201", pf.pick_gpu(s, "0000:01:00")))
-    assert checks["Hookscript"].status == "WARN"
+    s.storages["snippets"] = []
+    c = by_name(pf.evaluate(cfg(), s, "9201", pf.pick_gpu(s, "0000:01:00")))["GPU-guard hookscript"]
+    assert c.status == "FAIL" and "does not change storage.cfg" in c.fix
+    c = by_name(pf.evaluate(cfg(l1__hookscript="no"), s, "9201", pf.pick_gpu(s, "0000:01:00")))
+    assert c["GPU-guard hookscript"].status == "WARN"
 
 
 def test_host_prereqs_fail(tmp_path):

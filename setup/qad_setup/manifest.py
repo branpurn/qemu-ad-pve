@@ -125,7 +125,7 @@ class HostFacts:
 
 
 def plan_uninstall(m: Manifest, facts: HostFacts, force: bool = False,
-                   shutdown_timeout: int = 300) -> List[Action]:
+                   shutdown_timeout: int = 240) -> List[Action]:
     """Ordered actions that remove exactly what the manifest lists.
 
     Safety rules:

@@ -12,12 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: shellcheck (dkms + L1 scripts + setup.sh tool)
+      - name: shellcheck (dkms + L1 scripts + qm-native-9200 + setup.sh tool)
         run: |
           shellcheck --version
           # Scope to nested-KVM paths only; existing qemu-ad-pve harness scripts
           # are not yet shellcheck-clean and are not part of this integration.
-          mapfile -t scripts < <(git ls-files 'dkms/**/*.sh' 'scripts/l1-w10/*.sh' 'setup.sh' 'setup/**/*.sh')
+          mapfile -t scripts < <(git ls-files 'dkms/**/*.sh' 'scripts/l1-w10/*.sh' 'scripts/qm-native-9200/*.sh' 'setup.sh' 'setup/**/*.sh')
           printf 'checking %s\n' "${scripts[@]}"
           shellcheck -x "${scripts[@]}"
   pytest-tools:

@@ -5,7 +5,9 @@
 #
 # Environment (defaults = the lab disk):
 #   WIN_DISK_SERIAL / WIN_DISK_LABEL / WIN_DISK_UUID   identities to score
-#   WIN_DISK_MIN_GB / WIN_DISK_MAX_GB                 size window for the ntfs+size heuristic (70/90)
+#   WIN_DISK_MIN_GB / WIN_DISK_MAX_GB                 size window for the ntfs+size heuristic
+#                                                   (defaults 70/90 for the lab ~80G disk; setup.sh
+#                                                   writes ±20% of l2.disk_gb into /etc/qemu-ad-l2.env)
 #   WIN_DISK_ALLOW_BLANK=1   (Windows *install* only, used by setup.sh) also accept a completely
 #                            blank disk (no partition table, no filesystem signature), but ONLY when
 #                            its serial is exactly WIN_DISK_SERIAL. All refuse rules still apply.

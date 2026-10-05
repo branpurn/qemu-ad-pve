@@ -1,6 +1,6 @@
 # Roadmap: a patched KVM for one dev VM, living alongside an unchanged PVE
 
-Date: 2026-10-03 (integrated into qemu-ad-pve 2026-10-05). Status: planning document plus the tooling in-tree (`dkms/`, `tools/`, `.github/`). Lab notes referenced as "PR #n" are the notes from [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility) (merged to that repo's `main`; copies live under `docs/` here).
+Date: 2026-10-03 (integrated into qemu-ad-pve 2026-10-05). Status: planning document plus the tooling in-tree (`dkms/`, `tools/`, `.github/`). Lab notes referenced as "PR #n" are the notes from [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility) (private archive; merged to that repo's `main`; public copies live under `docs/` here).
 
 Scope: lab/dev use. This project does not research or implement anti-cheat evasion (see `docs/feasibility.md` 1.2).
 

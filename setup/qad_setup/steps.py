@@ -75,11 +75,19 @@ class Ctx:
         return self.state.facts.get("l1_ip", "<L1-IP>")
 
     # ---------------------------------------------------------------- ssh into L1
+    def _ssh_strict(self) -> str:
+        return "yes" if self.state.facts.get("hostkey_pinned") == "yes" else "accept-new"
+
     def ssh_argv(self, remote: str, ip: Optional[str] = None) -> List[str]:
-        strict = "yes" if self.state.facts.get("hostkey_pinned") == "yes" else "accept-new"
-        return ["ssh", "-i", self.key, "-o", "BatchMode=yes", "-o", f"StrictHostKeyChecking={strict}",
+        return ["ssh", "-i", self.key, "-o", "BatchMode=yes", "-o", f"StrictHostKeyChecking={self._ssh_strict()}",
                 "-o", f"UserKnownHostsFile={self.known_hosts}", "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=30", "-o", "LogLevel=ERROR", f"root@{ip or self.l1_ip()}", remote]
+
+    def scp_argv(self, *extra: str) -> List[str]:
+        """scp with the same host-key policy as ssh_argv (pinned -> yes, else accept-new)."""
+        return ["scp", "-q", "-i", self.key, "-o", "BatchMode=yes",
+                "-o", f"UserKnownHostsFile={self.known_hosts}",
+                "-o", f"StrictHostKeyChecking={self._ssh_strict()}", *extra]
 
     def ssh(self, remote: str, desc: str = "", check: bool = True, stream: bool = False,
             input_text: Optional[str] = None, timeout: Optional[int] = None, change: bool = True):
@@ -425,12 +433,9 @@ def s_l2_stage(c: Ctx) -> str:
     for kind, path in c.cfg.stage_files():
         dest = f"/root/qad-stage/in/{kind}/"
         c.ssh(f"install -d -m 700 {dest}", desc=f"staging {kind}")
-        argv = ["scp", "-q", "-r", "-i", c.key, "-o", "BatchMode=yes",
-                "-o", f"UserKnownHostsFile={c.known_hosts}", "-o", "StrictHostKeyChecking="
-                + ("yes" if c.state.facts.get("hostkey_pinned") == "yes" else "accept-new")]
         src = [os.path.join(path, f) for f in sorted(os.listdir(path))] if os.path.isdir(path) and not c.dry else [path]
-        c.runner.run(argv + src + [f"root@{c.l1_ip()}:{dest}"], desc=f"copy {kind} into L1 (host file only read)",
-                     timeout=7200)
+        c.runner.run(c.scp_argv("-r", *src, f"root@{c.l1_ip()}:{dest}"),
+                     desc=f"copy {kind} into L1 (host file only read)", timeout=7200)
     if c.download_proprietary and c.cfg.downloads():
         lines = "".join(f"{u} {s} {n}\n" for u, s, n in c.cfg.downloads())
         c.ssh("cat > /root/qad-stage/downloads.txt", desc="--download-proprietary list (downloaded in L1)",
@@ -441,14 +446,21 @@ def s_l2_stage(c: Ctx) -> str:
     c.ssh("rm -f /root/qad-stage/autounattend.xml", desc="reset autounattend")
     if c.cfg["l2.source"] == "iso" and au == "generate":
         pw, pk = c.cfg["l2.admin_password"], c.cfg["l2.product_key"]
+        # Register known secrets before any probe so -v / log redaction cannot leak them.
+        c.runner.secrets += [s for s in (pw, pk) if s]
         if not c.dry:  # resume: reuse what an earlier run stored in L1
             p = c.ssh_probe("cat /etc/qemu-ad/l2-secrets 2>/dev/null || true")
             old = parse_secrets(p.stdout if p else "")
-            pw = pw or old.get("QAD_ADMIN_PASSWORD", "")
-            pk = pk or old.get("QAD_PRODUCT_KEY", "")
+            if not pw and old.get("QAD_ADMIN_PASSWORD"):
+                pw = old["QAD_ADMIN_PASSWORD"]
+                c.runner.secrets.append(pw)
+            if not pk and old.get("QAD_PRODUCT_KEY"):
+                pk = old["QAD_PRODUCT_KEY"]
+                c.runner.secrets.append(pk)
         generated = not pw
         pw = pw or random_password()
-        c.runner.secrets += [pw] + ([pk] if pk else [])
+        if pw not in c.runner.secrets:
+            c.runner.secrets.append(pw)
         c.ssh("umask 077 && cat > /etc/qemu-ad/l2-secrets", desc="L2 admin password/key (root-only, L1)",
               input_text=plan.secrets_env(pw, pk))
         c.ssh("umask 077 && cat > /root/qad-stage/autounattend.xml", desc="generated autounattend.xml",
@@ -456,8 +468,8 @@ def s_l2_stage(c: Ctx) -> str:
         if generated and not c.dry:
             c.extra["admin_password"] = pw
     elif c.cfg["l2.source"] == "iso" and au.startswith("/"):
-        c.runner.run(["scp", "-q", "-i", c.key, "-o", "BatchMode=yes", "-o", f"UserKnownHostsFile={c.known_hosts}",
-                      au, f"root@{c.l1_ip()}:/root/qad-stage/autounattend.xml"], desc="your autounattend.xml")
+        c.runner.run(c.scp_argv(au, f"root@{c.l1_ip()}:/root/qad-stage/autounattend.xml"),
+                     desc="your autounattend.xml")
     c.l1("stage", timeout=7200)
     return "stage.iso" + (" + autounattend.iso" if au != "none" and c.cfg["l2.source"] == "iso" else "")
 

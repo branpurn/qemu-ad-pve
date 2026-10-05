@@ -71,6 +71,8 @@ def test_l1_env_is_shell_safe(tmp_path):
     assert vals["QAD_TIMEZONE"] == "W. Europe Standard Time"
     assert vals["QAD_WIN_ISO_LABEL"] == "CCCOMA X64"
     assert vals["QAD_L2_IP"] == "10.254.77.10"
+    assert vals["QAD_L2_DISK_GB"] == "128"
+    assert vals["QAD_L2_MEM"] == "6144" and vals["QAD_L2_SMP"] == "4"
     assert "PASSWORD" not in env
 
 
@@ -100,3 +102,35 @@ def test_guard_rendering_fails_loudly_on_changed_template(tmp_path):
     import pytest
     with pytest.raises(plan.TemplateError):
         plan.hookscript("#!/usr/bin/perl\nmy @ids = ('x');\n", "9301", gpu(tmp_path))
+
+
+def test_scp_argv_matches_ssh_hostkey_policy(tmp_path):
+    """Custom autounattend scp must pin host keys the same way ssh does (QA: was missing StrictHostKeyChecking)."""
+    from qad_setup import steps
+    from qad_setup.config import Config
+    from qad_setup.manifest import Manifest
+    from qad_setup.state import State
+    from qad_setup import ui
+
+    class R:
+        dry_run = False
+        secrets = []
+
+    gpu = hi.find_gpus(hi.read_sysfs_pci(str(make_sysroot(tmp_path))))[0]
+    cfg = Config({"l1.vmid": "9201"})
+    c = steps.Ctx(cfg=cfg, runner=R(), state=State(str(tmp_path / "s.json")),
+                  manifest=Manifest(install_id="x", path=str(tmp_path / "m.json")),
+                  prompter=ui.Prompter(True), repo=".", state_dir=str(tmp_path), gpu=gpu)
+    c.state.facts["l1_ip"] = "10.0.0.2"
+    # unpinned: accept-new
+    scp = c.scp_argv("/tmp/au.xml", "root@10.0.0.2:/root/qad-stage/autounattend.xml")
+    assert scp[:2] == ["scp", "-q"]
+    assert "StrictHostKeyChecking=accept-new" in scp
+    assert f"UserKnownHostsFile={c.known_hosts}" in " ".join(scp)
+    # pinned: yes
+    c.state.facts["hostkey_pinned"] = "yes"
+    scp2 = c.scp_argv("/tmp/au.xml", "root@10.0.0.2:/x")
+    assert "StrictHostKeyChecking=yes" in scp2
+    assert c.ssh_argv("true")[c.ssh_argv("true").index("-o") + 1].startswith("BatchMode")
+    ssh = c.ssh_argv("true")
+    assert "StrictHostKeyChecking=yes" in ssh

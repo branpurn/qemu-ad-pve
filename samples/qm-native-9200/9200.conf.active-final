@@ -1,0 +1,31 @@
+agent: 0
+args: -device pcie-pci-bridge,id=gpubr,bus=ich9-pcie-port-1,addr=0x0 -device vfio-pci,host=0000:02:00.0,id=gpu-vga,bus=gpubr,addr=0x1.0,multifunction=on -device vfio-pci,host=0000:02:00.1,id=gpu-audio,bus=gpubr,addr=0x1.1 -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=65536
+balloon: 0
+bios: ovmf
+boot: order=scsi0
+ciuser: debian
+cores: 8
+cpu: host
+efidisk0: fast_storage:9200/vm-9200-disk-0.qcow2,efitype=4m,pre-enrolled-keys=0,size=528K
+hookscript: iso_images:snippets/9200-gpu-guard.pl
+ide2: fast_storage:9200/vm-9200-cloudinit.qcow2,media=cdrom
+ipconfig0: ip=dhcp
+machine: q35,viommu=intel
+memory: 12288
+meta: creation-qemu=11.0.0,ctime=1790954396
+name: viommu-l1-gpu
+net0: virtio=BC:24:11:0E:69:36,bridge=vmbr1,firewall=0
+onboot: 0
+ostype: l26
+parent: pre-qm-native
+scsi0: fast_storage:9200/vm-9200-disk-1.qcow2,discard=on,size=30G
+scsi1: fast_storage:9200/vm-9200-disk-2.qcow2,discard=on,size=80G
+scsihw: virtio-scsi-single
+serial0: socket
+smbios1: uuid=b62acca0-5306-4246-a72c-ca7d7cf12c94
+sockets: 1
+sshkeys: ssh-ed25519%20AAAAC3NzaC1lZDI1NTE5AAAAIG2aJ69pRFr3yUvRPymhUD1N8ENzFBRw0vtma01iOrLm%20gpu-phase-l1%0A
+startup: down=240
+vga: std
+vmgenid: 1940248a-8687-496f-a37b-ce0f1298b50e
+

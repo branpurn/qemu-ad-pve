@@ -1,0 +1,61 @@
+=== TIME 2026-10-05T20:48:19+00:00 L1 boot=2026-10-05 20:47:45 ===
+kvm=6.12.111-kvmpatch1 kvm_amd=6.12.111-kvmpatch1 file=/lib/modules/6.12.111+deb13-amd64/updates/dkms/kvm.ko.xz
+enabled
+active
+MainPID=1032
+ExecMainStatus=0
+ActiveEnterTimestamp=Mon 2026-10-05 20:47:55 UTC
+--- previous L1 boot: shutdown path (journal -b -1)
+2026-10-05T20:46:05+00:00 viommu-l1-gpu systemd[1]: Started w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh.
+2026-10-05T20:47:19+00:00 viommu-l1-gpu systemd-logind[902]: Power key pressed short.
+2026-10-05T20:47:20+00:00 viommu-l1-gpu systemd-logind[902]: System is powering down.
+2026-10-05T20:47:20+00:00 viommu-l1-gpu systemd[1]: Stopping w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh...
+2026-10-05T20:47:20+00:00 viommu-l1-gpu l2-service.sh[1163]: 2026-10-05T20:47:20+00:00 stop: ACPI system_powerdown -> L2 pid=1031
+2026-10-05T20:47:20+00:00 viommu-l1-gpu systemd[1]: Stopping systemd-logind.service - User Login Management...
+2026-10-05T20:47:20+00:00 viommu-l1-gpu systemd[1]: Stopped systemd-logind.service - User Login Management.
+2026-10-05T20:47:29+00:00 viommu-l1-gpu l2-service.sh[1206]: 2026-10-05T20:47:29+00:00 stop: L2 exited cleanly after 9s
+2026-10-05T20:47:29+00:00 viommu-l1-gpu l2-service.sh[1217]: 2026-10-05T20:47:29+00:00 post: L2 network torn down; qemu=0
+2026-10-05T20:47:29+00:00 viommu-l1-gpu systemd[1]: w10-l2.service: Deactivated successfully.
+2026-10-05T20:47:29+00:00 viommu-l1-gpu systemd[1]: Stopped w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh.
+2026-10-05T20:47:29+00:00 viommu-l1-gpu systemd[1]: w10-l2.service: Consumed 1min 55.278s CPU time, 6.1G memory peak.
+2026-10-05T20:47:20+00:00 stop: ACPI system_powerdown -> L2 pid=1031
+2026-10-05T20:47:29+00:00 stop: L2 exited cleanly after 9s
+2026-10-05T20:47:29+00:00 post: L2 network torn down; qemu=0
+2026-10-05T20:47:54+00:00 pre: GPU 02:01.0/.1 on vfio-pci (waited 1s); kvm=6.12.111-kvmpatch1
+2026-10-05T20:47:54+00:00 viommu-l1-gpu systemd[1]: Starting w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh...
+2026-10-05T20:47:54+00:00 viommu-l1-gpu l2-service.sh[935]: 2026-10-05T20:47:54+00:00 pre: GPU 02:01.0/.1 on vfio-pci (waited 1s); kvm=6.12.111-kvmpatch1
+2026-10-05T20:47:54+00:00 viommu-l1-gpu start-l2.sh[944]: kvm ok: version=6.12.111-kvmpatch1 file=/lib/modules/6.12.111+deb13-amd64/updates/dkms/kvm.ko.xz patch_tag=step1-benign
+2026-10-05T20:47:54+00:00 viommu-l1-gpu start-l2.sh[959]: REFUSE /dev/sda: has mounted partition(s)
+2026-10-05T20:47:54+00:00 viommu-l1-gpu start-l2.sh[959]: RESOLVED Windows disk=/dev/sdb score=200 (serial=drive-scsi1 uuid=762491EA2491AE1D label=Windows ntfs+size=85899345920 )
+2026-10-05T20:47:54+00:00 viommu-l1-gpu start-l2.sh[944]: using /dev/sdb
+2026-10-05T20:47:54+00:00 viommu-l1-gpu dnsmasq[1028]: started, version 2.91 DNS disabled
+2026-10-05T20:47:54+00:00 viommu-l1-gpu dnsmasq[1028]: compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 no-Lua TFTP conntrack ipset nftset auth DNSSEC loop-detect inotify dumpfile
+2026-10-05T20:47:54+00:00 viommu-l1-gpu dnsmasq-dhcp[1028]: DHCP, IP range 10.99.0.10 -- 10.99.0.50, lease time 12h
+2026-10-05T20:47:54+00:00 viommu-l1-gpu dnsmasq-dhcp[1028]: DHCP, sockets bound exclusively to interface brl2
+2026-10-05T20:47:55+00:00 viommu-l1-gpu systemd[1]: Started w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh.
+L2_SSH_UP (waited ~15s)
+2026-10-05T20:48:01
+NVIDIA High Definition Audio | OK | Code 0
+NVIDIA GeForce RTX 4080 | OK | Code 0
+High Definition Audio Controller | OK | Code 0
+NVIDIA GeForce RTX 4080, 576.88, 16376 MiB, 1
+
+>     BAR1 Memory Usage
+          Total                             : 16384 MiB
+
+C:\gputest\py\Lib\site-packages\cupy\_environment.py:286: UserWarning: CUDA path could not be detected. Set CUDA_PATH environment variable if CuPy fails to load.
+CUDA device: NVIDIA GeForce RTX 4080 cc 8 9 mem MiB 16375 runtime 12090 driver 12090
+SGEMM 4096^3: 4.5 ms, 30.2 TFLOP/s; reduction sum rel err 5.96e-08
+RESULT: PASS
+C:\gputest\py\Lib\site-packages\cupy\_environment.py:286: UserWarning: CUDA path could not be detected. Set CUDA_PATH environment variable if CuPy fails to load.
+CUDA device: NVIDIA GeForce RTX 4080 cc 8 9 mem MiB 16375 runtime 12090 driver 12090
+SGEMM 4096^3: 4.8 ms, 28.7 TFLOP/s; reduction sum rel err 5.96e-08
+RESULT: PASS
+2026-10-05T20:48:13 id=6005 The Event log service was started.
+2026-10-05T20:47:25 id=6006 The Event log service was stopped.
+2026-10-05T20:47:19 id=1074 The process C:\Windows\system32\winlogon.exe (W10-BM) has initiated the power off of computer W10-BM on behalf of user NT AUTHORITY\SYSTEM for the following reason: No title for this reason could be found
+2026-10-05T20:46:26 id=6005 The Event log service was started.
+2026-10-05T20:45:30 id=6006 The Event log service was stopped.
+2026-10-05T20:45:24 id=1074 The process C:\Windows\system32\winlogon.exe (W10-BM) has initiated the power off of computer W10-BM on behalf of user NT AUTHORITY\SYSTEM for the following reason: No title for this reason could be found
+L1 fault-pattern lines: 1
+VERIFY_DONE

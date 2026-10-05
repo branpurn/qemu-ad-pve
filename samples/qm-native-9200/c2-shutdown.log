@@ -1,0 +1,14 @@
+qm shutdown start 2026-10-05T16:47:19-04:00
+9200-gpu-guard: released 0000:02:00.0 0000:02:00.1
+qm shutdown rc=0 after 11s at 2026-10-05T16:47:30-04:00
+status: stopped
+no 9200 qemu
+	Kernel driver in use: vfio-pci
+	Kernel driver in use: vfio-pci
+0000:05:00.0 110 pid:3630014
+0000:05:00.1 110 pid:3630014
+         Stopping w10-l2.service - Windows …rough) via /root/w10/start-l2.sh...
+M[  OK  ] Stopped w10-l2.service - Windows L…through) via /root/w10/start-l2.sh.
+[  OK  ] Finished systemd-poweroff.service - System Power Off.
+[  OK  ] Reached target poweroff.target - System Power Off.
+Job w10-l2.service/stop running (9s / 3min 9s)

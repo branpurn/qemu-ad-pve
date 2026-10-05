@@ -4,6 +4,28 @@ A development-environment compatibility tool. It builds a second QEMU next to st
 
 This is for a lab or development host, where a guest operating system or a program you are testing refuses to run because it has detected virtual hardware. Typical cases are a driver that faults when the hypervisor CPUID leaf is present, firmware or application test suites that branch on SMBIOS and device-name strings, and PCI passthrough of a device whose driver will not bind on a guest that advertises itself as a VM. It is not a production hypervisor, and it is not a supported Proxmox configuration.
 
+
+## Nested KVM + GPU to Windows L2 (cohesive lab path)
+
+This repository is also the home for the **separate-KVM feasibility work**: stock Proxmox on the bare-metal host, a nested L1 (VM 9200) that runs **patched KVM (DKMS) + qemu-ad-pve**, and a Windows 10 L2 guest that gets the RTX 4080 for AI workloads.
+
+| Layer | What runs | Role |
+| --- | --- | --- |
+| L0 host | Stock PVE + stock `kvm`/`kvm-amd` | Unchanged. GPU VFIO + Intel vIOMMU hand-off into L1. |
+| L1 (VM 9200) | Nested PVE/Linux with **DKMS patched `kvm`/`kvm-amd`** and **qemu-ad-pve** as its QEMU | Where the compatibility QEMU and patched hypervisor live; does not replace the host modules. |
+| L2 | Windows 10 + RTX 4080 | AI/OpenCL/CuPy (and related) workloads under the nested path. |
+
+Supporting material in this tree:
+
+- Feasibility study and lab notes: [`docs/feasibility.md`](docs/feasibility.md), [`docs/viommu-nested-spike.md`](docs/viommu-nested-spike.md), [`docs/gpu-phase-*.md`](docs/)
+- Roadmap / host-impact: [`docs/roadmap.md`](docs/roadmap.md)
+- L1-only patched KVM: [`dkms/`](dkms/README.md)
+- Launch helper (Intel vIOMMU + GPU topology): [`tools/gen-launch.py`](tools/README.md)
+- L1 Windows helpers: [`scripts/l1-w10/`](scripts/l1-w10/)
+- CI for the nested-KVM tooling: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+
+The archive history of the desk study and notes PRs remains in [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility); **new work belongs here**.
+
 ## What it is not
 
 - It does not replace `pve-qemu-kvm` or `qemu-server`. Those packages keep updating on the normal schedule.

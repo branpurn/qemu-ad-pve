@@ -1,0 +1,56 @@
+name: kernel-watch
+
+# Stub: reports when Proxmox publishes a kernel newer than tools/pve-kernel-baseline.txt.
+# It only READS the public Proxmox apt index (download.proxmox.com). It does not touch any
+# Proxmox host or VM. Nothing is built yet (see TODO below).
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Proxmox apt suite to watch"
+        default: pve-no-subscription
+        type: choice
+        options: [pve-no-subscription, pvetest]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Look for newer proxmox-kernel packages
+        id: watch
+        env:
+          SUITE: ${{ inputs.suite || 'pve-no-subscription' }}
+        run: |
+          set +e
+          python3 tools/check-new-kernel.py \
+            --suite "$SUITE" \
+            --github-output "$GITHUB_OUTPUT" | tee watch.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          { echo '### Proxmox kernel watch'; echo '```'; cat watch.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # 0 = nothing new, 10 = new version; anything else is a real failure
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then exit "$rc"; fi
+      - name: Open an issue (only if the repo variable KERNEL_WATCH_OPEN_ISSUE is "true")
+        if: steps.watch.outputs.new == 'true' && vars.KERNEL_WATCH_OPEN_ISSUE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.watch.outputs.latest }}
+        run: |
+          title="New Proxmox kernel: ${LATEST}"
+          if gh issue list --state all --search "\"${title}\" in:title" --json number --jq 'length' | grep -qv '^0$'; then
+            echo "issue for ${LATEST} already exists"; exit 0
+          fi
+          gh issue create --title "${title}" --body-file watch.txt
+      # TODO(build): for each new kernel, in a throwaway L1-like container/VM (never on the PVE host):
+      #   1. fetch the matching kernel source (pve-kernel.git for proxmox-kernel-<ver>; mainline tag only as approximation)
+      #   2. dkms/fetch-kvm-source.sh + `make KVER=<ver>-pve` against proxmox-headers-<ver>-pve
+      #   3. smoke-load in a nested L1 and run the GPU compute check from docs/roadmap.md (self-hosted runner needed)
+      #   4. on success, bump tools/pve-kernel-baseline.txt via PR

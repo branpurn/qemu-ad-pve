@@ -20,3 +20,9 @@ Flag provenance (verified 2026-10-03 against QEMU `master` sources and the QEMU 
 * `pt` is not emitted: QEMU 11.0's `intel-iommu` has no `pt` property (PR #4), 10.2 does (PR #6).
 * `pcie-root-port` `pref64-reserve`, `pcie-pci-bridge`, `device-iotlb`, `aw-bits`: property names checked in `master`; only `pcie-pci-bridge` under a root port was actually run (PR #4-#6).
 * `X-PciMmio64Mb`: used for the L2 in PR #5; for the L0 -> L1 launch it is new here and not yet run.
+
+## Real showcmd sample
+
+See [`samples/`](../samples/) for a captured `qm showcmd 9200` from the working Intel-vIOMMU
++ GPU config and the match notes in [`docs/gpu-phase-gen-launch-real-showcmd.md`](../docs/gpu-phase-gen-launch-real-showcmd.md).
+Bridge id for the first GPU is `gpubr` (matches the hand-maintained launch scripts).

@@ -22,6 +22,7 @@ Supporting material in this tree:
 - L1-only patched KVM: [`dkms/`](dkms/README.md)
 - Launch helper (Intel vIOMMU + GPU topology): [`tools/gen-launch.py`](tools/README.md)
 - L1 Windows helpers: [`scripts/l1-w10/`](scripts/l1-w10/)
+- Real `qm showcmd` / launch samples: [`samples/`](samples/README.md)
 - CI for the nested-KVM tooling: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
 The archive history of the desk study and notes PRs remains in [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility); **new work belongs here**.

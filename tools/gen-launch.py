@@ -329,7 +329,7 @@ def _gpu(opts: list[Opt], cfg: Config, warnings: list[str]) -> None:
             parent = orig_bus
         used_parents.add(parent)
         if cfg.topology == "bridge":
-            bus = f"gpubr{n}"
+            bus = "gpubr" if n == 0 else f"gpubr{n}"
             new.append(mkdev("pcie-pci-bridge", id=bus, bus=parent, addr="0x0"))
             addr_base = "0x1"
         else:

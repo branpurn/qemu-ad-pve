@@ -254,3 +254,17 @@ def test_idempotent_on_own_topology():
     again, _ = gl.generate("/usr/bin/kvm " + body, gl.Config())
     assert again.count("-device pcie-pci-bridge") == 1
     assert again.count("-device intel-iommu") == 1
+
+
+def test_real_showcmd_sample_emits_gpubr_and_matches_topology():
+    sample = (ROOT / "samples" / "qm-showcmd-9200-intel-raw.txt")
+    if not sample.exists():
+        pytest.skip("real sample not in tree")
+    text = sample.read_text()
+    opts, _, _ = build(text)
+    bridges = devices(opts, "pcie-pci-bridge")
+    assert bridges and "id=gpubr," in bridges[0].value
+    vfs = devices(opts, "vfio-pci")
+    assert len(vfs) == 2
+    assert all("bus=gpubr" in v.value for v in vfs)
+    assert not gl.check(opts)

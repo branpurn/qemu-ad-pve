@@ -15,6 +15,8 @@ This repository is also the home for the **separate-KVM feasibility work**: stoc
 | L1 (VM 9200) | Nested PVE/Linux with **DKMS patched `kvm`/`kvm-amd`** and **qemu-ad-pve** as its QEMU | Where the compatibility QEMU and patched hypervisor live; does not replace the host modules. |
 | L2 | Windows 10 + RTX 4080 | AI/OpenCL/CuPy (and related) workloads under the nested path. |
 
+**One command (untested end to end):** on the PVE host, `./setup.sh` creates a new L1 VM and the Windows L2 with the GPU (preflight, `--dry-run`, resumable, `uninstall` removes exactly what it created). See [`docs/SETUP.md`](docs/SETUP.md).
+
 Supporting material in this tree:
 
 - Feasibility study and lab notes: [`docs/feasibility.md`](docs/feasibility.md), [`docs/viommu-nested-spike.md`](docs/viommu-nested-spike.md), [`docs/gpu-phase-*.md`](docs/)

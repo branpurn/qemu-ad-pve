@@ -1,0 +1,4 @@
+      VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB) PID
+       100 win-gpu              stopped    16384            128.00 0
+       101 mapped-gpu           running    8192              64.00 4242
+      9200 nested-l1            stopped    12288             48.00 0

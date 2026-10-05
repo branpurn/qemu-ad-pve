@@ -1,0 +1,4 @@
+processor	: 0
+vendor_id	: AuthenticAMD
+model name	: AMD Ryzen 9 7950X 16-Core Processor
+flags		: fpu vme de pse tsc msr pae mce cx8 apic svm npt nrip_save avic x2apic

@@ -802,11 +802,24 @@ next:
 EOF
 }
 
+# build only: deps, fetch, patch, build to ${PREFIX}. No divert, no wrapper,
+# no VMID list. Used inside the nested L1 by setup/l1/qad-l1.sh (qemu-ad-build),
+# where start-l2.sh runs ${PREFIX}/bin/qemu-system-x86_64 directly.
+cmd_build() {
+  need_root
+  install_deps
+  fetch_sources
+  apply_patch
+  build_qemu
+  "${PREFIX}/bin/qemu-system-x86_64" --version | head -n1
+}
+
 usage() {
   cat <<EOF
 usage: $0 <command> [args]
 
   install            deps, fetch, patch, build to ${PREFIX}, divert, wrapper
+  build              deps, fetch, patch, build to ${PREFIX} only (no divert/wrapper; nested L1)
   add-vm <vmid>      route that guest to the side binary
   del-vm <vmid>      route that guest back to pve-qemu-kvm
   showcmd <vmid>     print vendor argv and the stripped side argv
@@ -839,6 +852,7 @@ main() {
   shift || true
   case "$cmd" in
     install)   cmd_install "$@" ;;
+    build)     cmd_build ;;
     add-vm)    need_root; add_vm "${1:-}" ;;
     del-vm)    need_root; del_vm "${1:-}" ;;
     showcmd)   showcmd "${1:-}" ;;

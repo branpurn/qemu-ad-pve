@@ -2,16 +2,35 @@
 # Resolve the Windows L2 disk at runtime. Prefer stable identity over device name.
 # Priority: ID_SERIAL_SHORT=drive-scsi1 -> NTFS LABEL=Windows / UUID -> size~80G+ntfs.
 # Refuse: any mountpoint under the disk, any ext4 partition, ambiguous multi-match.
+#
+# Environment (defaults = the lab disk):
+#   WIN_DISK_SERIAL / WIN_DISK_LABEL / WIN_DISK_UUID   identities to score
+#   WIN_DISK_MIN_GB / WIN_DISK_MAX_GB                 size window for the ntfs+size heuristic (70/90)
+#   WIN_DISK_ALLOW_BLANK=1   (Windows *install* only, used by setup.sh) also accept a completely
+#                            blank disk (no partition table, no filesystem signature), but ONLY when
+#                            its serial is exactly WIN_DISK_SERIAL. All refuse rules still apply.
 set -euo pipefail
 
 prefer_serial="${WIN_DISK_SERIAL:-drive-scsi1}"
 prefer_label="${WIN_DISK_LABEL:-Windows}"
 prefer_uuid="${WIN_DISK_UUID:-762491EA2491AE1D}"
-min_bytes=$((70*1024*1024*1024))
-max_bytes=$((90*1024*1024*1024))
+min_bytes=$(( ${WIN_DISK_MIN_GB:-70} * 1024 * 1024 * 1024 ))
+max_bytes=$(( ${WIN_DISK_MAX_GB:-90} * 1024 * 1024 * 1024 ))
+allow_blank="${WIN_DISK_ALLOW_BLANK:-0}"
 
 candidates=()
 declare -A why
+declare -A blank
+
+# is_blank <disk>: no partitions, no partition table, no filesystem/RAID/LVM signature.
+is_blank() {
+  local d="$1" n
+  n=$(lsblk -no NAME "$d" 2>/dev/null | wc -l)
+  [ "$n" -eq 1 ] || return 1
+  [ -z "$(lsblk -dno PTTYPE,FSTYPE "$d" 2>/dev/null | tr -d '[:space:]')" ] || return 1
+  [ -z "$(wipefs -n "$d" 2>/dev/null | tail -n +2)" ] || return 1
+  return 0
+}
 
 is_refused() {
   local d="$1"
@@ -56,6 +75,10 @@ for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
   if [ "$has_ntfs" = 1 ] && [ "$size" -ge "$min_bytes" ] && [ "$size" -le "$max_bytes" ]; then
     score=$((score+20)); w="${w}ntfs+size=$size "
   fi
+  if [ "$allow_blank" = 1 ] && [ "$serial" = "$prefer_serial" ] && [ "$has_ntfs" = 0 ] && is_blank "$d"; then
+    blank["$d"]=1
+    w="${w}blank(install) "
+  fi
   if [ "$score" -gt 0 ]; then
     candidates+=("$score:$d")
     why["$d"]="$w"
@@ -87,8 +110,10 @@ if is_refused "$WD"; then
   echo "FATAL: selected $WD failed final refuse check" >&2
   exit 91
 fi
-# must still look like Windows
-lsblk -no FSTYPE "$WD" | grep -q ntfs || { echo "FATAL: $WD has no NTFS" >&2; exit 93; }
+# must still look like Windows (or, for an install, be the blank disk with the exact serial)
+if [ -z "${blank[$WD]:-}" ]; then
+  lsblk -no FSTYPE "$WD" | grep -q ntfs || { echo "FATAL: $WD has no NTFS" >&2; exit 93; }
+fi
 
 echo "RESOLVED Windows disk=$WD score=$top_score (${why[$WD]})" >&2
 printf '%s\n' "$WD"

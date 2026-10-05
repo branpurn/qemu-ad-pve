@@ -1,0 +1,34 @@
+qm shutdown start 2026-10-05T16:43:10-04:00
+9200-gpu-guard: released 0000:02:00.0 0000:02:00.1
+qm shutdown rc=0 after 17s at 2026-10-05T16:43:27-04:00
+status: stopped
+982729 bash -c cd /root/gpu-phase-l1/qmnative && sed -i "s/grep -ciE 'DMAR.\*fault|IO_PAGE_FAULT|AER|BUG|oops'/grep -ciE 'DMAR:.*fault|DMAR: \\[DMA|IO_PAGE_FAULT|AER: (Corrected|Uncorrected|Multiple)|BUG:|Oops|Call Trace'/" verify-l2.sh && grep -n 'fault-pattern' verify-l2.sh; cat > shut.sh <<'EOF' #!/bin/bash # host: plain qm shutdown 9200 with serial console capture; usage: shut.sh <tag> cd /root/gpu-phase-l1/qmnative; t=$1 ( timeout 300 socat -u UNIX-CONNECT:/var/run/qemu-server/9200.serial0 - > serial-$t.log 2>&1 & ) sleep 1 echo "qm shutdown start $(date -Is)"; t0=$(date +%s) qm shutdown 9200; rc=$? echo "qm shutdown rc=$rc after $(($(date +%s)-t0))s at $(date -Is)" qm status 9200; pgrep -af 'kvm.*-id 9200' || echo 'no 9200 qemu' lspci -nnk -s 02:00 | grep driver; cat /run/qemu-server/pci-id-reservations sleep 1; pkill -f 'socat -u UNIX-CONNECT:/var/run/qemu-server/9200.serial0' || true tr -d '\r' < serial-$t.log | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -iE 'w10-l2|Windows L2|power key|Power Button|poweroff|Reached target|Stopping|Stopped' | tail -25 EOF chmod 700 shut.sh; ./shut.sh c0 2>&1 | tee c0-shutdown.log
+	Kernel driver in use: vfio-pci
+	Kernel driver in use: vfio-pci
+0000:05:00.0 110 pid:3630014
+0000:05:00.1 110 pid:3630014
+         Stopping systemd-timesyncd.service - Network Time Synchronization...
+[  OK  ] Stopped systemd-tmpfiles-setup.ser…reate System Files and Directories.
+[  OK  ] Stopped systemd-binfmt.service - Set Up Additional Binary Formats.
+[  OK  ] Stopped target local-fs.target - Local File Systems.
+[  OK  ] Stopped systemd-growfs-root.service - Grow Root File System.
+[  OK  ] Stopped systemd-resolved.service - Network Name Resolution.
+[  OK  ] Stopped target swap.target - Swaps.
+[  OK  ] Stopped systemd-timesyncd.service - Network Time Synchronization.
+[  OK  ] Stopped systemd-networkd.service - Network Configuration.
+[  OK  ] Stopped target network-pre.target - Preparation for Network.
+[  OK  ] Stopped cloud-init-local.service -…ud-init: Local Stage (pre-network).
+[  OK  ] Stopped systemd-network-generator.…ork Units from Kernel Command Line.
+[  OK  ] Stopped systemd-sysctl.service - Apply Kernel Variables.
+[  OK  ] Reached target umount.target - Unmount All Filesystems.
+[  OK  ] Stopped systemd-fsck@dev-disk-by\x…41c96d-1dff-44f0-9854-712947501f5b.
+[  OK  ] Stopped target local-fs-pre.target…Preparation for Local File Systems.
+[  OK  ] Stopped systemd-remount-fs.service…mount Root and Kernel File Systems.
+[  OK  ] Stopped systemd-tmpfiles-setup-dev…Create Static Device Nodes in /dev.
+[  OK  ] Stopped systemd-tmpfiles-setup-dev…ic Device Nodes in /dev gracefully.
+[  OK  ] Reached target shutdown.target - System Shutdown.
+[  OK  ] Reached target final.target - Late Shutdown Services.
+[  OK  ] Finished systemd-poweroff.service - System Power Off.
+[  OK  ] Reached target poweroff.target - System Power Off.
+[  425.275097] systemd-shutdown[1]: Stopping MD devices.
+[  425.275634] systemd-shutdown[1]: All MD devices stopped.

@@ -86,7 +86,7 @@ Already works with `--no-virtio` (PR #6). Decide whether to keep AHCI/e1000e for
 2. Write the A1 compute-check script (PyTorch/CUDA + pinned-buffer stress) and decide the throughput bar after a stock-KVM measurement.
 3. Verify `gen-launch.py` output against real `qm showcmd` output of VM 9200 (the unit-test sample is synthetic, modelled on the PR descriptions and qemu-server's usual layout) and against `qemu-system-x86_64 -device help` of QEMU 11.0.x (flag names were checked against QEMU `master` sources/wiki, **not** run on 11.0.x).
 4. Test `intel-iommu` first-device placement vs qm's order, `device-iotlb=on`/`aw-bits`, and `iommufd` (all listed "not run" in PR #4).
-5. GPU on a root port without the audio function, or a qm-supported way to share one address space (so `qm start` works again) - e.g. a qemu-server patch; today only raw launch works.
+5. ~~GPU on a root port without the audio function, or a qm-supported way to share one address space (so `qm start` works again)~~ **Done** without a qemu-server patch: `machine: q35,viommu=intel` + `args:` (bridge + both functions) + a 9200-only PCI-reservation hookscript; see [gpu-phase-qm-native-9200.md](gpu-phase-qm-native-9200.md).
 6. L1 warm reboot and GPU reset behaviour (FLR/bus reset) with the GPU attached; repeated L1 restarts.
 7. Unexplained: why AMD vIOMMU registers no VFIO notifier (PR #3); candidate upstream report.
 8. Secure Boot in the L1 (VM 9200 is not known to use it); MOK drill from `dkms/README.md`.

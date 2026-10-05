@@ -1,0 +1,375 @@
+"""Configuration: schema, defaults, INI parsing and validation (pure logic, unit-tested).
+
+The config file is INI (configparser) with three sections plus [stage]:
+
+    [l1]    the nested L1 VM that is created on the PVE host
+    [gpu]   which host GPU is handed to L1 (and from there to L2)
+    [l2]    the Windows L2 created inside L1
+    [stage] optional offline files for the L2 (NVIDIA driver, Python, wheels, OpenSSH)
+
+Every key has a default; ``auto`` means "decide from the host at preflight time".
+Unknown keys are an error (typos must not silently fall back to a default).
+"""
+from __future__ import annotations
+
+import configparser
+import ipaddress
+import re
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Tuple
+
+DEBIAN_IMAGE_URL = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2"
+
+
+class ConfigError(ValueError):
+    """Invalid configuration (message is user-facing)."""
+
+
+@dataclass(frozen=True)
+class Key:
+    section: str
+    name: str
+    default: str
+    help: str
+    kind: str = "str"  # str | int | bool | choice | path | cidr | vmid | slot | ip
+    choices: Tuple[str, ...] = ()
+    minimum: Optional[int] = None
+    secret: bool = False
+    prompt: bool = False  # asked interactively (others only via --config)
+
+    @property
+    def fq(self) -> str:
+        return f"{self.section}.{self.name}"
+
+
+SCHEMA: List[Key] = [
+    # ---- L1 -------------------------------------------------------------------------
+    Key("l1", "vmid", "auto", "VMID of the new L1 VM (auto = next free VMID from pvesh)", "vmid", prompt=True),
+    Key("l1", "name", "qad-l1", "Name of the L1 VM", prompt=True),
+    Key("l1", "storage", "auto", "Storage for the L1 disks (needs content 'images')", prompt=True),
+    Key("l1", "iso_storage", "auto", "Storage for the cloud-init seed ISO (needs content 'iso')"),
+    Key("l1", "bridge", "vmbr0", "Host bridge for the L1 NIC (L1 needs internet for apt/DKMS)", prompt=True),
+    Key("l1", "memory_mb", "12288", "L1 RAM in MiB (must hold the L2 RAM plus ~4 GiB)", "int", minimum=4096, prompt=True),
+    Key("l1", "cores", "8", "L1 vCPUs", "int", minimum=2, prompt=True),
+    Key("l1", "disk_gb", "48", "L1 root disk size in GiB (DKMS sources, QEMU, staging ISOs)", "int", minimum=24),
+    Key("l1", "ip", "dhcp", "L1 address: 'dhcp' or CIDR like 192.168.1.50/24", "cidr"),
+    Key("l1", "gateway", "", "Gateway when l1.ip is static", "ip"),
+    Key("l1", "dns", "", "DNS server when l1.ip is static (default: the gateway)", "ip"),
+    Key("l1", "debian_image_url", DEBIAN_IMAGE_URL,
+        "Debian 13 *generic* cloud image (standard kernel; genericcloud's cloud kernel is untested)"),
+    Key("l1", "debian_image", "", "Use this local qcow2 instead of downloading (path on the PVE host)", "path"),
+    Key("l1", "hold_kernel", "yes", "apt-mark hold the L1 kernel (DKMS AUTOINSTALL is off in dkms/)", "bool"),
+    Key("l1", "kvm_source", "debian", "Source for the patched KVM: debian (linux-source of the L1 kernel, "
+        "like the lab build) or upstream (dkms/fetch-kvm-source.sh)", "choice", ("debian", "upstream")),
+    Key("l1", "qemu_ad", "auto", "qemu-ad-pve binary for L2: copy (host /opt/qemu-ad, read-only), build "
+        "(qemu-ad-pve.sh build inside L1) or auto (copy if present on host, else build)", "choice",
+        ("auto", "copy", "build")),
+    Key("l1", "hookscript", "auto", "Install the GPU-guard hookscript from scripts/qm-native-9200 (refuses start unless the GPU is "
+        "on vfio-pci; reserves it via qemu-server so hostpci VMs are refused while L1 runs). auto = yes. "
+        "no = unprotected (not recommended)", "choice", ("auto", "yes", "no")),
+    Key("l1", "snippets_storage", "auto", "Existing storage with content 'snippets' for the hookscript "
+        "(setup.sh never changes storage.cfg)"),
+    Key("l1", "onboot", "no", "Start L1 when the host boots (GPU is then taken from other VMs)", "bool"),
+    Key("l1", "shutdown_timeout", "240", "startup down= : seconds `qm shutdown`/host shutdown wait for L1 "
+        "(L2 ACPI wait 150 s < w10-l2.service TimeoutStopSec 180 s < this)", "int", minimum=200),
+    # ---- GPU ------------------------------------------------------------------------
+    Key("gpu", "slot", "auto", "Host PCI slot of the GPU, e.g. 0000:01:00 (all functions are passed)", "slot",
+        prompt=True),
+    Key("gpu", "mmio64_mb", "65536", "OVMF 64-bit MMIO aperture (X-PciMmio64Mb) for L1 and L2", "int",
+        minimum=32768),
+    # ---- L2 -------------------------------------------------------------------------
+    Key("l2", "source", "iso", "How to create the Windows L2: iso (install from a Windows ISO), image "
+        "(existing qcow2/raw), none (L1 only)", "choice", ("iso", "image", "none"), prompt=True),
+    Key("l2", "windows_iso", "", "Windows ISO: PVE volid (local:iso/Win10.iso) or absolute path", prompt=True),
+    Key("l2", "image", "", "Existing Windows disk image (qcow2/raw) on the PVE host; must boot on SATA/AHCI",
+        "path", prompt=True),
+    Key("l2", "disk_gb", "128", "Windows disk size in GiB (iso source)", "int", minimum=40, prompt=True),
+    Key("l2", "memory_mb", "6144", "L2 RAM in MiB", "int", minimum=2048, prompt=True),
+    Key("l2", "cores", "4", "L2 vCPUs", "int", minimum=1),
+    Key("l2", "autounattend", "generate", "generate (unattended install), none (interactive via VNC) "
+        "or a path to your own autounattend.xml", prompt=True),
+    Key("l2", "windows_version", "10", "10 or 11 (11 adds the TPM/SecureBoot setup bypass; untested)",
+        "choice", ("10", "11")),
+    Key("l2", "windows_edition", "auto", "Image name in install.wim (auto: 'Windows <ver> Pro')"),
+    Key("l2", "product_key", "", "Your own product key (empty = none; Setup may ask, see docs)", secret=True,
+        prompt=True),
+    Key("l2", "admin_user", "qad", "Local administrator created by autounattend"),
+    Key("l2", "admin_password", "", "Password for admin_user (empty = random, shown once at the end)",
+        secret=True),
+    Key("l2", "computer_name", "QAD-L2", "Windows computer name"),
+    Key("l2", "timezone", "UTC", "Windows time zone id (e.g. 'Eastern Standard Time')"),
+    Key("l2", "locale", "en-US", "Windows UI/input locale"),
+    Key("l2", "cpu", "host", "L2 -cpu value (plain host gave Code 0 in the lab)"),
+    Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
+    Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
+        minimum=10),
+    Key("l2", "vnc", "127.0.0.1:0", "VNC display of the L2 *inside L1* during install (reach it with ssh -L)"),
+    # ---- staging --------------------------------------------------------------------
+    Key("stage", "nvidia_driver", "", "NVIDIA Windows driver .exe on the PVE host (installed at first GPU boot)",
+        "path", prompt=True),
+    Key("stage", "python_installer", "", "python-3.x-amd64.exe on the PVE host", "path"),
+    Key("stage", "wheelhouse", "", "Directory of Windows wheels (*.whl, optional SHA256SUMS*) on the PVE host",
+        "path"),
+    Key("stage", "openssh_zip", "", "OpenSSH-Win64.zip (Win32-OpenSSH release) for offline sshd in L2", "path"),
+    Key("stage", "extra_files", "", "Comma-separated extra files copied to the staging ISO root", "str"),
+    Key("stage", "downloads", "", "Only with --download-proprietary: 'url sha256 [name]' entries separated "
+        "by ';'. Downloaded INSIDE L1, sha256-checked, put on the staging ISO", "str"),
+    # ---- verify ---------------------------------------------------------------------
+    Key("verify", "cuda", "auto", "Run the PyTorch CUDA check in L2: auto (if torch was staged), yes, no",
+        "choice", ("auto", "yes", "no")),
+]
+
+KEYS: Dict[str, Key] = {k.fq: k for k in SCHEMA}
+TRUE = {"1", "yes", "true", "on", "y"}
+FALSE = {"0", "no", "false", "off", "n"}
+SLOT_RE = re.compile(r"^(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}$")
+VOLID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-_.]*:[^\s]+$")
+
+
+def as_bool(value: str) -> bool:
+    v = value.strip().lower()
+    if v in TRUE:
+        return True
+    if v in FALSE:
+        return False
+    raise ConfigError(f"not a yes/no value: {value!r}")
+
+
+def norm_slot(value: str) -> str:
+    v = value.strip().lower()
+    if not SLOT_RE.match(v):
+        raise ConfigError(f"gpu.slot must look like 0000:01:00 (no function), got {value!r}")
+    return v if v.count(":") == 2 else "0000:" + v
+
+
+def _check(key: Key, value: str) -> str:
+    """Validate/normalise one value; return the normalised string."""
+    v = value.strip()
+    if v == "auto" and key.default == "auto":
+        return v
+    if key.kind == "int":
+        if not re.fullmatch(r"\d+", v):
+            raise ConfigError(f"{key.fq}: expected a whole number, got {value!r}")
+        if key.minimum is not None and int(v) < key.minimum:
+            raise ConfigError(f"{key.fq}: {v} is below the minimum {key.minimum}")
+        return str(int(v))
+    if key.kind == "bool":
+        return "yes" if as_bool(v) else "no"
+    if key.kind == "choice":
+        if v not in key.choices:
+            raise ConfigError(f"{key.fq}: must be one of {', '.join(key.choices)}, got {value!r}")
+        return v
+    if key.kind == "vmid":
+        if not re.fullmatch(r"[1-9]\d{2,8}", v) or int(v) < 100:
+            raise ConfigError(f"{key.fq}: VMID must be a number >= 100, got {value!r}")
+        return v
+    if key.kind == "slot":
+        return norm_slot(v)
+    if key.kind == "cidr":
+        if key.fq == "l1.ip" and v == "dhcp":
+            return v
+        try:
+            iface = ipaddress.ip_interface(v)
+        except ValueError:
+            raise ConfigError(f"{key.fq}: expected CIDR like 192.168.1.50/24, got {value!r}") from None
+        if iface.version != 4:
+            raise ConfigError(f"{key.fq}: only IPv4 is supported")
+        if key.fq == "l2.net_cidr":
+            net = iface.network
+            if net.prefixlen > 28:
+                raise ConfigError(f"{key.fq}: network {net} is too small (need /28 or larger)")
+            return str(net)
+        if iface.network.prefixlen == 32:
+            raise ConfigError(f"{key.fq}: give the prefix length, e.g. {v}/24")
+        return str(iface)
+    if key.kind == "ip":
+        if v == "":
+            return v
+        try:
+            ipaddress.IPv4Address(v)
+        except ValueError:
+            raise ConfigError(f"{key.fq}: expected an IPv4 address, got {value!r}") from None
+        return v
+    if key.kind == "path":
+        if v and not v.startswith("/"):
+            raise ConfigError(f"{key.fq}: expected an absolute path on the PVE host, got {value!r}")
+        return v
+    if "\n" in v:
+        raise ConfigError(f"{key.fq}: newlines are not allowed")
+    return v
+
+
+class Config:
+    """Validated settings. Access as cfg['l1.vmid'] (strings) or cfg.int/bool helpers."""
+
+    def __init__(self, values: Optional[Dict[str, str]] = None, explicit: Optional[set] = None):
+        self.values: Dict[str, str] = {k.fq: k.default for k in SCHEMA}
+        self.explicit: set = set(explicit or ())
+        for fq, v in (values or {}).items():
+            self.set(fq, v)
+
+    def set(self, fq: str, value: str, explicit: bool = True) -> None:
+        if fq not in KEYS:
+            raise ConfigError(f"unknown setting {fq!r}")
+        self.values[fq] = _check(KEYS[fq], str(value))
+        if explicit:
+            self.explicit.add(fq)
+
+    def __getitem__(self, fq: str) -> str:
+        return self.values[fq]
+
+    def int(self, fq: str) -> int:
+        return int(self.values[fq])
+
+    def bool(self, fq: str) -> bool:
+        return as_bool(self.values[fq])
+
+    def is_auto(self, fq: str) -> bool:
+        return self.values[fq] == "auto"
+
+    def edition(self) -> str:
+        e = self.values["l2.windows_edition"]
+        return f"Windows {self.values['l2.windows_version']} Pro" if e == "auto" else e
+
+    def stage_files(self) -> List[Tuple[str, str]]:
+        """(kind, host path) for every staging input that is set."""
+        out = []
+        for k in ("nvidia_driver", "python_installer", "wheelhouse", "openssh_zip"):
+            if self.values[f"stage.{k}"]:
+                out.append((k, self.values[f"stage.{k}"]))
+        for p in split_list(self.values["stage.extra_files"]):
+            out.append(("extra", p))
+        return out
+
+    def downloads(self) -> List[Tuple[str, str, str]]:
+        return parse_downloads(self.values["stage.downloads"])
+
+    def to_ini(self, include_secrets: bool = False) -> str:
+        cp = configparser.ConfigParser(interpolation=None)
+        for key in SCHEMA:
+            if not cp.has_section(key.section):
+                cp.add_section(key.section)
+            v = self.values[key.fq]
+            if key.secret and v and not include_secrets:
+                v = ""
+            cp.set(key.section, key.name, v)
+        import io
+        buf = io.StringIO()
+        buf.write("# qemu-ad-pve setup config (secrets are not written back; see docs/SETUP.md)\n")
+        cp.write(buf)
+        return buf.getvalue()
+
+
+def split_list(value: str) -> List[str]:
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
+def parse_downloads(value: str) -> List[Tuple[str, str, str]]:
+    """'url sha256 [name]; ...' -> [(url, sha256, name)]. sha256 is mandatory."""
+    out = []
+    for entry in [e.strip() for e in value.split(";") if e.strip()]:
+        parts = entry.split()
+        if len(parts) not in (2, 3):
+            raise ConfigError(f"stage.downloads: expected 'url sha256 [name]', got {entry!r}")
+        url, sha = parts[0], parts[1].lower()
+        if not url.startswith("https://"):
+            raise ConfigError(f"stage.downloads: only https:// URLs are accepted, got {url!r}")
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise ConfigError(f"stage.downloads: {url}: sha256 must be 64 hex digits")
+        name = parts[2] if len(parts) == 3 else url.rstrip("/").rsplit("/", 1)[-1]
+        if not re.fullmatch(r"[A-Za-z0-9._+-]+", name):
+            raise ConfigError(f"stage.downloads: unsafe file name {name!r}")
+        out.append((url, sha, name))
+    return out
+
+
+def parse_ini(text: str, source: str = "<config>") -> Config:
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read_string(text, source=source)
+    except configparser.Error as exc:
+        raise ConfigError(f"{source}: {exc}") from None
+    if cp.defaults():
+        raise ConfigError(f"{source}: settings must be inside a [section]")
+    values = {}
+    for section in cp.sections():
+        for name, value in cp.items(section):
+            fq = f"{section}.{name}"
+            if fq not in KEYS:
+                raise ConfigError(f"{source}: unknown setting [{section}] {name}")
+            values[fq] = value
+    cfg = Config()
+    for fq, v in values.items():
+        try:
+            cfg.set(fq, v)
+        except ConfigError as exc:
+            raise ConfigError(f"{source}: {exc}") from None
+    return cfg
+
+
+def cross_validate(cfg: Config) -> List[str]:
+    """Checks that involve several keys. Returns problems (empty = fine)."""
+    bad = []
+    if cfg["l1.ip"] != "dhcp" and not cfg["l1.gateway"]:
+        bad.append("l1.ip is static: set l1.gateway too")
+    if cfg.int("l1.memory_mb") < cfg.int("l2.memory_mb") + 3072:
+        bad.append(f"l1.memory_mb ({cfg['l1.memory_mb']}) must be at least l2.memory_mb + 3072 "
+                   f"({cfg.int('l2.memory_mb') + 3072})")
+    if cfg.int("l2.cores") > cfg.int("l1.cores"):
+        bad.append("l2.cores cannot exceed l1.cores")
+    src = cfg["l2.source"]
+    if src == "iso" and not cfg["l2.windows_iso"]:
+        bad.append("l2.source=iso needs l2.windows_iso (PVE volid like local:iso/Win10.iso or a path)")
+    if src == "iso" and cfg["l2.windows_iso"]:
+        w = cfg["l2.windows_iso"]
+        if not (w.startswith("/") or VOLID_RE.match(w)):
+            bad.append(f"l2.windows_iso {w!r} is neither an absolute path nor a PVE volid")
+    if src == "image" and not cfg["l2.image"]:
+        bad.append("l2.source=image needs l2.image (path to a qcow2/raw image on the PVE host)")
+    au = cfg["l2.autounattend"]
+    if au not in ("generate", "none") and not au.startswith("/"):
+        bad.append("l2.autounattend must be generate, none or an absolute path")
+    pk = cfg["l2.product_key"]
+    if pk and not re.fullmatch(r"[A-Z0-9]{5}(-[A-Z0-9]{5}){4}", pk.upper()):
+        bad.append("l2.product_key must look like XXXXX-XXXXX-XXXXX-XXXXX-XXXXX")
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,15}", cfg["l2.computer_name"]):
+        bad.append("l2.computer_name: 1-15 letters, digits or '-'")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,20}", cfg["l2.admin_user"]):
+        bad.append("l2.admin_user: 1-20 letters, digits, '_', '.', '-'")
+    for ch in "<>&\"'":
+        if ch in cfg["l2.admin_password"]:
+            bad.append("l2.admin_password must not contain < > & \" ' (they are written into XML)")
+            break
+    if not re.fullmatch(r"[A-Za-z0-9 ()+.,_-]{1,64}", cfg["l2.timezone"]):
+        bad.append("l2.timezone has unexpected characters")
+    if not re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}", cfg["l2.locale"]):
+        bad.append("l2.locale must look like en-US")
+    if not re.fullmatch(r"[A-Za-z0-9 ()._-]{1,64}", cfg.edition()):
+        bad.append("l2.windows_edition has unexpected characters")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}", cfg["l1.name"]):
+        bad.append("l1.name must be a valid DNS name (letters, digits, '-', '.')")
+    if not re.fullmatch(r"(127\.0\.0\.1:\d{1,2}|none)", cfg["l2.vnc"]):
+        bad.append("l2.vnc must be 127.0.0.1:<display> (L1-local only) or none")
+    if not re.fullmatch(r"[A-Za-z0-9_,=+.-]+", cfg["l2.cpu"]):
+        bad.append("l2.cpu has unexpected characters")
+    try:
+        cfg.downloads()
+    except ConfigError as exc:
+        bad.append(str(exc))
+    return bad
+
+
+def l2_addresses(net_cidr: str) -> Tuple[str, str, str, str]:
+    """(bridge_ip, l2_ip, dhcp_start, dhcp_end) inside the isolated L1<->L2 network."""
+    net = ipaddress.ip_network(net_cidr)
+    hosts = list(net.hosts())
+    return str(hosts[0]), str(hosts[9 if len(hosts) > 12 else 1]), str(hosts[-3]), str(hosts[-2])
+
+
+def answer_for_prompt(key: Key, raw: str, current: str) -> str:
+    """Interactive answer -> value ('' keeps the current/default value)."""
+    raw = raw.strip()
+    return current if raw == "" else raw
+
+
+Validator = Callable[[str], Optional[str]]

@@ -2,6 +2,7 @@
 
 | Doc | Summary |
 | --- | --- |
+| [SETUP.md](SETUP.md) | **One-command setup** (`./setup.sh` on the PVE host): creates L1 + Windows L2 with the GPU; host changes, rollback, defaults (untested end to end) |
 | [feasibility.md](feasibility.md) | Desk study: separate KVM alongside PVE — options, risks, recommended nested-L1 path |
 | [roadmap.md](roadmap.md) | Phases, host impact/rollback, acceptance criteria |
 | [viommu-nested-spike.md](viommu-nested-spike.md) | Nested vIOMMU spike (AMD-Vi) |

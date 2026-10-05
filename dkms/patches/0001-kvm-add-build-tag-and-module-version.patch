@@ -1,0 +1,16 @@
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index f1351d0ce..e7495f638 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -73,6 +73,11 @@
+ MODULE_AUTHOR("Qumranet");
+ MODULE_DESCRIPTION("Kernel-based Virtual Machine (KVM) Hypervisor");
+ MODULE_LICENSE("GPL");
++MODULE_VERSION("l1-dkms-0.1");
++
++static char *build_tag = "example";
++module_param(build_tag, charp, 0444);
++MODULE_PARM_DESC(build_tag, "Free-form label for this out-of-tree build (example patch, no functional change)");
+ 
+ /* Architectures should define their poll value according to the halt latency */
+ unsigned int halt_poll_ns = KVM_HALT_POLL_NS_DEFAULT;

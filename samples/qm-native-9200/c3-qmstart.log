@@ -1,0 +1,4 @@
+qm start 2026-10-05T16:47:36-04:00
+generating cloud-init ISO
+9200-gpu-guard: reserved 0000:02:00.0 0000:02:00.1 for VM 9200 (start window)
+9200-gpu-guard: reserved 0000:02:00.0 0000:02:00.1 for VM 9200 pid 984804

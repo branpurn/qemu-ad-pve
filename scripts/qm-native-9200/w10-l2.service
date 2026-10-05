@@ -1,0 +1,26 @@
+# L1 (VM 9200) unit: autostart the Windows L2 after boot; graceful L2 power-down when L1 shuts
+# down (e.g. ACPI power button from `qm shutdown 9200`). Install: /etc/systemd/system/w10-l2.service
+# then `systemctl daemon-reload && systemctl enable w10-l2.service`.
+[Unit]
+Description=Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh
+Documentation=https://github.com/branpurn/qemu-ad-pve/blob/main/docs/gpu-phase-qm-native-9200.md
+After=network-online.target systemd-modules-load.service local-fs.target
+Wants=network-online.target
+# skip cleanly when L1 is booted without the GPU (e.g. AMD/no-GPU config) or without the L2 kit
+ConditionPathExists=/root/w10/start-l2.sh
+ConditionPathExists=/sys/bus/pci/devices/0000:02:01.0
+
+[Service]
+Type=forking
+PIDFile=/root/w10/w10.pid
+ExecStartPre=/root/w10/l2-service.sh pre
+# start-l2.sh keeps its patched-KVM check (exit 80/81 -> unit fails, L2 not started)
+ExecStart=/root/w10/start-l2.sh
+ExecStop=/root/w10/l2-service.sh stop
+ExecStopPost=/root/w10/l2-service.sh post
+TimeoutStartSec=180
+TimeoutStopSec=180
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

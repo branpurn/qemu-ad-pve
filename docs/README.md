@@ -15,5 +15,6 @@
 | [gpu-phase-gen-launch-real-showcmd.md](gpu-phase-gen-launch-real-showcmd.md) | Real `qm showcmd 9200` sample + gen-launch `gpubr` match |
 | [gpu-phase-pytorch-l2.md](gpu-phase-pytorch-l2.md) | PyTorch CUDA on Windows L2 under default patched KVM |
 | [gpu-phase-gen-launch-e2e.md](gpu-phase-gen-launch-e2e.md) | L1 booted from gen-launch E2E + offline PyTorch under qemu-ad-pve L2 |
+| [gpu-phase-qm-native-9200.md](gpu-phase-qm-native-9200.md) | VM 9200 driven by plain `qm start`/`qm shutdown` (args + guard hookscript) + L1 autostart unit for the Windows L2 |
 
 Source archive: [branpurn/separate-kvm-feasibility](https://github.com/branpurn/separate-kvm-feasibility).

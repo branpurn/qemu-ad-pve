@@ -1,0 +1,44 @@
+=== TIME 2026-10-05T20:41:51+00:00 L1 check (qm start, args-only topology) ===
+6.12.111+deb13-amd64
+kvm=6.12.111-kvmpatch1 kvm_amd=6.12.111-kvmpatch1 tag=step1-benign
+/lib/modules/6.12.111+deb13-amd64/updates/dkms/kvm.ko.xz
+/lib/modules/6.12.111+deb13-amd64/updates/dkms/kvm-amd.ko.xz
+kvm_amd
+kvm-patched/1.0, 6.12.111+deb13-amd64, x86_64: installed (Original modules exist)
+[    0.126809] DMAR-IR: IOAPIC id 0 under DRHD base  0xfed90000 IOMMU 0
+[    0.127582] DMAR-IR: Queued invalidation will be enabled to support x2apic and Intr-remapping.
+[    0.129388] DMAR-IR: Enabled IRQ remapping in x2apic mode
+[    1.567635] DMAR: Intel(R) Virtualization Technology for Directed I/O
+[    3.694607] kvm_amd: kvm_amd: out-of-tree patched build loaded (tag=step1-benign, version 6.12.111-kvmpatch1)
+01:00.0 PCI bridge [0604]: Red Hat, Inc. QEMU PCIe-to-PCI bridge [1b36:000e]
+02:01.0 VGA compatible controller [0300]: NVIDIA Corporation AD103 [GeForce RTX 4080] [10de:2704] (rev a1)
+02:01.1 Audio device [0403]: NVIDIA Corporation AD103 High Definition Audio Controller [10de:22bb] (rev a1)
+02:01.0 driver=vfio-pci group=11
+02:01.1 driver=vfio-pci group=11
+	Region 1: Memory at 1000000000 (64-bit, prefetchable) [size=16G]
+	Region 3: Memory at 1400000000 (64-bit, prefetchable) [size=32M]
+--- power button / logind
+N: Name="Power Button"
+#HandlePowerKey=poweroff
+#HandlePowerKeyLongPress=ignore
+/var/log/journal
+--- install unit
+Created symlink '/etc/systemd/system/multi-user.target.wants/w10-l2.service' → '/etc/systemd/system/w10-l2.service'.
+no L2 qemu yet
+start rc=0 in 1s
+● w10-l2.service - Windows L2 guest (qemu-ad-pve, RTX 4080 passthrough) via /root/w10/start-l2.sh
+     Loaded: loaded (/etc/systemd/system/w10-l2.service; enabled; preset: enabled)
+     Active: active (running) since Mon 2026-10-05 20:41:54 UTC; 9ms ago
+ Invocation: 6bbf5b4a58034a648c6d2b9db020a4fe
+       Docs: https://github.com/branpurn/qemu-ad-pve/blob/main/docs/gpu-phase-qm-native-9200.md
+    Process: 1506 ExecStartPre=/root/w10/l2-service.sh pre (code=exited, status=0/SUCCESS)
+    Process: 1520 ExecStart=/root/w10/start-l2.sh (code=exited, status=0/SUCCESS)
+   Main PID: 1596 (qemu-system-x86)
+      Tasks: 10 (limit: 14173)
+     Memory: 6G (peak: 6G)
+        CPU: 736ms
+     CGroup: /system.slice/w10-l2.service
+             ├─1592 dnsmasq --interface=brl2 --bind-interfaces --except-interface=lo --port=0 --dhcp-range=10.99.0.10,10.99.0.50,12h --dhcp-host=52:54:00:aa:bb:01,10.99.0.2 --pid-file=/run/dnsmasq-brl2.pid --dhcp-leasefile=/run/dnsmasq-brl2.leases
+             └─1596 /opt/qemu-ad/bin/qemu-system-x86_64 -name w10-l2-ad -machine q35,accel=kvm -cpu host -smp 4 -m 6144 -rtc base=localtime -drive if=pflash,format=raw,readonly=on,file=/root/l2/OVMF_CODE.fd -drive if=pflash,format=raw,file=/root/w10/VARS.fd -drive file=/dev/sdb,format=raw,if=none,id=wdisk,cache=none,aio=native,discard=unmap -device ide-hd,drive=wdisk,bus=ide.1,rotation_rate=1 -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device e1000e,netdev=n0,mac=52:54:00:aa:bb:01 -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=65536 -monitor unix:/root/w10/mon,server,nowait -qmp unix:/root/w10/qmp,server,nowait -debugcon file:/root/w10/ovmf-debug.log -global isa-debugcon.iobase=0x402 -vga std -display none -usb -device usb-tablet -serial none -device pcie-root-port,id=rpg,chassis=11,slot=1 -device vfio-pci,host=0000:02:01.0,bus=rpg,addr=0x0.0x0,multifunction=on -device vfio-pci,host=0000:02:01.1,bus=rpg,addr=0x0.0x1 -pidfile /root/w10/w10.pid -daemonize
+
+L2 pid=1596 exe=/opt/qemu-ad/bin/qemu-system-x86_64

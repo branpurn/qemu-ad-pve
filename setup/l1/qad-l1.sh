@@ -3,7 +3,7 @@
 # setup.sh on the PVE host over SSH. Every step is idempotent and logs to
 # /var/log/qemu-ad-setup/<step>.log. Settings: /etc/qemu-ad/setup.env (written by setup.sh).
 #
-# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | vfio | scripts | check-kvm |
+# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | qemu-ad-libs PKG... | vfio | scripts | check-kvm |
 #         stage | l2-install | l2-install-status | l2-wipe | l2-enable | verify | status
 # Exit codes: 0 ok, 100 = reboot L1 and run the same step again, other = failure.
 set -euo pipefail
@@ -150,6 +150,17 @@ step_qemu_ad_build() {
   # Build-only entry of qemu-ad-pve.sh: deps, fetch (pinned sha256), patch, build to /opt/qemu-ad.
   # No /usr/bin/kvm divert (there is no qemu-server in L1).
   "$REPO/qemu-ad-pve.sh" build
+}
+
+step_qemu_ad_libs() { # <debian package>...: runtime libraries the copied host /opt/qemu-ad needs
+  # setup.sh maps the sonames qemu-ad-check reports as missing to package names with `dpkg -S` on the
+  # PVE host (same Debian 13 archive), then calls this. Only installs; never removes anything.
+  [ "$#" -gt 0 ] || die "qemu-ad-libs: no packages given"
+  local p
+  for p in "$@"; do [[ $p =~ ^[a-z0-9][a-z0-9.+-]+$ ]] || die "qemu-ad-libs: bad package name '$p'"; done
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y --no-install-recommends "$@"
+  say "installed $*"
 }
 
 step_qemu_ad_check() {
@@ -506,6 +517,7 @@ case "$step" in
   dkms) step_dkms ;;
   qemu-ad-build) step_qemu_ad_build ;;
   qemu-ad-check) step_qemu_ad_check ;;
+  qemu-ad-libs) step_qemu_ad_libs "${@:2}" ;;
   vfio) step_vfio ;;
   scripts) step_scripts ;;
   check-kvm) step_check_kvm ;;

@@ -174,9 +174,9 @@ class App:
         if cfg.is_auto("l1.hookscript"):
             cfg.set("l1.hookscript", "yes", explicit=False)  # preflight FAILs if no snippets storage exists
         if cfg["l2.source"] == "iso" and not cfg["l2.windows_iso"]:
-            isos = [f for f in _list_isos(self.runner, snap) if re.search(r"win", f, re.I)]
-            if isos:
-                cfg.set("l2.windows_iso", isos[0], explicit=False)
+            iso = pick_windows_iso(_list_isos(self.runner, snap), cfg["l2.windows_version"])
+            if iso:
+                cfg.set("l2.windows_iso", iso, explicit=False)
         # ---- questions
         if ask and p.interactive and not p.assume_yes:
             ui.heading("Settings (Enter keeps the [default]; see docs/SETUP.md for all keys)")
@@ -208,6 +208,24 @@ def _relevant(cfg: Config, fq: str) -> bool:
     if fq.startswith("l2.") or fq.startswith("stage."):
         return src != "none" or fq == "l2.source"
     return True
+
+
+# Windows installer ISO names: Win10_22H2_English_x64v1.iso, Win11_24H2_English_x64.iso,
+# en-us_windows_10_..._x64_dvd_....iso. Not virtio-win-*.iso (driver ISO; the old r"win" match picked it
+# on the live E2E host because it sorts first) and not *unattend*.iso (answer-file ISOs).
+_WIN_ISO_RE = re.compile(r"(?:^|[^a-z0-9])win(?:dows)?[ _.-]?(10|11)(?![0-9])", re.I)
+
+
+def pick_windows_iso(volids: List[str], version: str = "10") -> Optional[str]:
+    """Best Windows installer ISO among PVE volids (preferring l2.windows_version), else None."""
+    hits = []
+    for v in volids:
+        name = v.rsplit("/", 1)[-1]
+        m = _WIN_ISO_RE.search(name)
+        if not m or re.search(r"virtio|unattend", name, re.I):
+            continue
+        hits.append((m.group(1) != version, v))
+    return sorted(hits)[0][1] if hits else None
 
 
 def _list_isos(runner: Runner, snap: pf.Snapshot) -> List[str]:

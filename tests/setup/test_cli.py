@@ -107,3 +107,16 @@ def test_python39_syntax():
     import ast
     for f in (REPO / "setup/qad_setup").glob("*.py"):
         ast.parse(f.read_text(), feature_version=(3, 9))
+
+
+def test_pick_windows_iso_skips_virtio_and_unattend():
+    # Volids as listed on the live E2E host (2026-10-06): virtio-win sorts before Win10 and was auto-picked.
+    vols = ["iso_images:iso/debian-13.6.0-amd64-DVD-1.iso", "iso_images:iso/virtio-win-0.1.285.iso",
+            "iso_images:iso/w10bm-unattend.iso", "iso_images:iso/Win10_22H2_English_x64v1.iso",
+            "iso_images:iso/Win11_24H2_English_x64.iso", "local:iso/virtio-win-0.1.285.iso"]
+    assert cli.pick_windows_iso(vols) == "iso_images:iso/Win10_22H2_English_x64v1.iso"
+    assert cli.pick_windows_iso(vols, "11") == "iso_images:iso/Win11_24H2_English_x64.iso"
+    assert cli.pick_windows_iso(["local:iso/en-us_windows_10_business_editions_22h2_x64_dvd.iso"]) \
+        == "local:iso/en-us_windows_10_business_editions_22h2_x64_dvd.iso"
+    assert cli.pick_windows_iso(["local:iso/virtio-win.iso", "local:iso/windows-unattend.iso"]) is None
+    assert cli.pick_windows_iso([]) is None

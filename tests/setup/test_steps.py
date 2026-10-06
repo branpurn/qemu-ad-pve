@@ -233,3 +233,46 @@ def test_l2_hostkey_reset_on_install_and_wipe_and_used_by_verify():
     run_sh = (REPO / "tests/w10-code43-run.sh").read_text()
     assert '"UserKnownHostsFile=${W10_KNOWN_HOSTS}"' in run_sh
     assert '"StrictHostKeyChecking=${W10_STRICT_HOST_KEY:-yes}"' in run_sh
+
+
+def test_missing_libs_and_host_packages(tmp_path):
+    # Live E2E 2026-10-06: the copied host /opt/qemu-ad needed libgcrypt.so.20 + libiscsi.so.7 in a fresh L1.
+    out = "=== qad-l1.sh qemu-ad-check 2026-10-06T12:47:41+00:00\nQEMU_AD=libs-missing libiscsi.so.7 libgcrypt.so.20 \n"
+    assert steps._missing_libs(out) == ["libgcrypt.so.20", "libiscsi.so.7"]
+    assert steps._missing_libs("QEMU_AD=QEMU emulator version 10.2.2\n") == []
+    c = ctx(tmp_path, {"dpkg -S */libgcrypt.so.20": (0, "libgcrypt20:amd64: /usr/lib/x86_64-linux-gnu/libgcrypt.so.20\n"),
+                       "dpkg -S */libiscsi.so.7": (0, "libiscsi7:amd64: /usr/lib/x86_64-linux-gnu/libiscsi.so.7\n")})
+    assert steps.host_lib_packages(c, ["libgcrypt.so.20", "libiscsi.so.7"]) == ["libgcrypt20", "libiscsi7"]
+    with pytest.raises(steps.StepError, match="no host package"):
+        steps.host_lib_packages(c, ["libnothere.so.1"])
+    with pytest.raises(steps.StepError, match="unexpected library"):
+        steps.host_lib_packages(c, ["x; rm -rf /"])
+
+
+def test_l1_qemu_ad_installs_missing_libs_after_copy(tmp_path, monkeypatch):
+    c = ctx(tmp_path, {"dpkg -S */libgcrypt.so.20": (0, "libgcrypt20:amd64: /usr/lib/x86_64-linux-gnu/libgcrypt.so.20\n")})
+    c.cfg.set("l1.qemu_ad", "copy")
+    checks = iter([subprocess.CompletedProcess([], 1, "QEMU_AD=libs-missing libgcrypt.so.20\n", ""),
+                   subprocess.CompletedProcess([], 1, "QEMU_AD=libs-missing libgcrypt.so.20\n", ""),
+                   subprocess.CompletedProcess([], 0, "QEMU_AD=QEMU emulator version 10.2.2\n", "")])
+    monkeypatch.setattr(steps.Ctx, "ssh_probe", lambda self, remote, timeout=60: next(checks))
+
+    class P:
+        returncode = 0
+        stdout = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr("subprocess.Popen", P)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    assert steps.s_l1_qemu_ad(c) == "QEMU_AD=QEMU emulator version 10.2.2"
+    assert any("qad-l1.sh qemu-ad-libs libgcrypt20" in " ".join(a) for a in c.runner.ran)
+
+
+def test_check_detail_drops_banner():
+    out = "=== qad-l1.sh qemu-ad-check 2026-10-06T12:47:41+00:00\nQEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7\n"
+    assert steps._check_detail(out) == "QEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7"
+    assert steps._check_detail("") == "(no output)"

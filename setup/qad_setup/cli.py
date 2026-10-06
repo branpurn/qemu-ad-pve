@@ -174,9 +174,9 @@ class App:
         if cfg.is_auto("l1.hookscript"):
             cfg.set("l1.hookscript", "yes", explicit=False)  # preflight FAILs if no snippets storage exists
         if cfg["l2.source"] == "iso" and not cfg["l2.windows_iso"]:
-            isos = [f for f in _list_isos(self.runner, snap) if re.search(r"win", f, re.I)]
-            if isos:
-                cfg.set("l2.windows_iso", isos[0], explicit=False)
+            iso = pick_windows_iso(_list_isos(self.runner, snap), cfg["l2.windows_version"])
+            if iso:
+                cfg.set("l2.windows_iso", iso, explicit=False)
         # ---- questions
         if ask and p.interactive and not p.assume_yes:
             ui.heading("Settings (Enter keeps the [default]; see docs/SETUP.md for all keys)")
@@ -208,6 +208,24 @@ def _relevant(cfg: Config, fq: str) -> bool:
     if fq.startswith("l2.") or fq.startswith("stage."):
         return src != "none" or fq == "l2.source"
     return True
+
+
+# Windows installer ISO names: Win10_22H2_English_x64v1.iso, Win11_24H2_English_x64.iso,
+# en-us_windows_10_..._x64_dvd_....iso. Not virtio-win-*.iso (driver ISO; the old r"win" match picked it
+# on the live E2E host because it sorts first) and not *unattend*.iso (answer-file ISOs).
+_WIN_ISO_RE = re.compile(r"(?:^|[^a-z0-9])win(?:dows)?[ _.-]?(10|11)(?![0-9])", re.I)
+
+
+def pick_windows_iso(volids: List[str], version: str = "10") -> Optional[str]:
+    """Best Windows installer ISO among PVE volids (preferring l2.windows_version), else None."""
+    hits = []
+    for v in volids:
+        name = v.rsplit("/", 1)[-1]
+        m = _WIN_ISO_RE.search(name)
+        if not m or re.search(r"virtio|unattend", name, re.I):
+            continue
+        hits.append((m.group(1) != version, v))
+    return sorted(hits)[0][1] if hits else None
 
 
 def _list_isos(runner: Runner, snap: pf.Snapshot) -> List[str]:
@@ -310,6 +328,7 @@ def cmd_install(app: App) -> int:
             app.manifest.add("dir", path=app.root)
         app.manifest.add("dir", path=app.setup_dir)
         app.open_log()
+        _track_log(app)  # also records setup/logs/ itself (open_log creates it before s_host_dirs runs)
         saved = os.path.join(app.setup_dir, "config.ini")
         app.runner.write_file(saved, cfg.to_ini(), mode=0o600, desc="answers (no secrets)")
         for p in (saved, app.state.path):
@@ -385,11 +404,25 @@ def cmd_status(app: App) -> int:
     return 0
 
 
+def _track_log(app: App) -> None:
+    """Record the current run's log (and setup/logs/) in the manifest so `uninstall` removes it.
+
+    Before (live E2E 2026-10-06): only install logs were recorded and setup/logs/ itself never was,
+    so after `setup.sh verify` + `uninstall` the host kept /var/lib/qemu-ad/setup/logs/verify-*.log.
+    """
+    if app.args.dry_run or app.manifest is None or not app.runner.log_path:
+        return
+    app.manifest.add("dir", path=os.path.dirname(app.runner.log_path))
+    app.manifest.add("file", path=app.runner.log_path)
+    app.manifest.save()
+
+
 def cmd_verify(app: App) -> int:
     if (rc := _need_install(app)) is not None:
         return rc
     ctx = _ctx_for(app)
     app.open_log()
+    _track_log(app)
     if "l1_ip" not in app.state.facts:
         ui.error("L1 address unknown (install did not get that far)")
         return 1

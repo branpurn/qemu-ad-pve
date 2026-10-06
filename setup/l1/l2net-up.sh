@@ -25,7 +25,7 @@ mkdir -p "$RUN"
 if ! ip link show "$BR" >/dev/null 2>&1; then
   ip link add "$BR" type bridge
 fi
-if ! ip -4 addr show dev "$BR" | grep -q "inet $BRIP/"; then
+if ! grep -q "inet $BRIP/" <<<"$(ip -4 addr show dev "$BR")"; then
   ip addr add "$BRIP/$PREFIX" dev "$BR"
 fi
 ip link set "$BR" up

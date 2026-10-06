@@ -3,7 +3,7 @@
 # setup.sh on the PVE host over SSH. Every step is idempotent and logs to
 # /var/log/qemu-ad-setup/<step>.log. Settings: /etc/qemu-ad/setup.env (written by setup.sh).
 #
-# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | vfio | scripts | check-kvm |
+# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | qemu-ad-libs PKG... | vfio | scripts | check-kvm |
 #         stage | l2-install | l2-install-status | l2-wipe | l2-enable | verify | status
 # Exit codes: 0 ok, 100 = reboot L1 and run the same step again, other = failure.
 set -euo pipefail
@@ -125,9 +125,12 @@ step_dkms() {
   other=$(dkms status 2>/dev/null | awk -F'[/,: ]+' '{print $1"/"$2}' | grep -v "^$DKMS_NAME/" | grep -i kvm || true)
   [ -z "$other" ] || die "another patched-KVM DKMS package is registered ($other); remove it first (docs/SETUP.md)"
   st=$(dkms status "$DKMS_NAME/$DKMS_VER" -k "$kver" 2>/dev/null || true)
-  if printf '%s' "$st" | grep -q installed; then
+  # No `cmd | grep -q` under pipefail anywhere here: grep exits at the first match, the writer can die
+  # of SIGPIPE and the pipeline then reports failure (live E2E 2026-10-06: `lsmod | grep -q` made
+  # check-kvm FAIL on a correct L1 every time). Match on captured output instead.
+  if grep -q installed <<<"$st"; then
     say "DKMS $DKMS_NAME/$DKMS_VER already installed for $kver"
-  elif dkms status "$DKMS_NAME/$DKMS_VER" 2>/dev/null | grep -q .; then
+  elif grep -q . <<<"$(dkms status "$DKMS_NAME/$DKMS_VER" 2>/dev/null)"; then
     say "DKMS $DKMS_NAME/$DKMS_VER registered but not installed for $kver: build + install"
     dkms build "$DKMS_NAME/$DKMS_VER" -k "$kver"
     dkms install "$DKMS_NAME/$DKMS_VER" -k "$kver"
@@ -150,6 +153,17 @@ step_qemu_ad_build() {
   # Build-only entry of qemu-ad-pve.sh: deps, fetch (pinned sha256), patch, build to /opt/qemu-ad.
   # No /usr/bin/kvm divert (there is no qemu-server in L1).
   "$REPO/qemu-ad-pve.sh" build
+}
+
+step_qemu_ad_libs() { # <debian package>...: runtime libraries the copied host /opt/qemu-ad needs
+  # setup.sh maps the sonames qemu-ad-check reports as missing to package names with `dpkg -S` on the
+  # PVE host (same Debian 13 archive), then calls this. Only installs; never removes anything.
+  [ "$#" -gt 0 ] || die "qemu-ad-libs: no packages given"
+  local p
+  for p in "$@"; do [[ $p =~ ^[a-z0-9][a-z0-9.+-]+$ ]] || die "qemu-ad-libs: bad package name '$p'"; done
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y --no-install-recommends "$@"
+  say "installed $*"
 }
 
 step_qemu_ad_check() {
@@ -262,9 +276,9 @@ step_check_kvm() {
   file=$(modinfo -F filename kvm 2>/dev/null || echo none)
   echo "KVM_VERSION=$ver"
   echo "KVM_FILE=$file"
-  printf '%s' "$ver" | grep -Eq "$KVM_PATCH_RE" || ok=0
+  [[ $ver =~ $KVM_PATCH_RE ]] || ok=0
   case "$file" in */updates/dkms/*) ;; *) ok=0 ;; esac
-  lsmod | grep -q "^$(kmod) " || ok=0
+  [ -d "/sys/module/$(kmod)" ] || ok=0  # was `lsmod | grep -q`: SIGPIPE + pipefail = false FAIL
   echo "KVM_MODULE=$(kmod) loaded=$(lsmod | grep -c "^$(kmod) ")"
   if compgen -G '/sys/class/iommu/dmar*' >/dev/null; then echo "DMAR=yes"; else echo "DMAR=no"; ok=0; fi
   if bdfs=$(gpu_bdfs); then
@@ -393,8 +407,8 @@ step_l2_wipe() {
   done
   [ "${#hits[@]}" -eq 1 ] || die "expected exactly one disk with serial drive-scsi1, found ${#hits[@]}"
   d=${hits[0]}
-  lsblk -no MOUNTPOINT "$d" | grep -q . && die "$d has mounted partitions"
-  lsblk -no FSTYPE "$d" | grep -qx ext4 && die "$d has an ext4 filesystem (L1 root?)"
+  grep -q . <<<"$(lsblk -no MOUNTPOINT "$d")" && die "$d has mounted partitions"
+  grep -qx ext4 <<<"$(lsblk -no FSTYPE "$d")" && die "$d has an ext4 filesystem (L1 root?)"
   say "wiping signatures on $d (serial drive-scsi1)"
   lsblk -lnpo NAME,TYPE "$d" | awk '$2=="part"{print $1}' | while read -r p; do wipefs -a "$p"; done
   wipefs -a "$d"
@@ -473,12 +487,17 @@ step_verify() {
     esac
     local cuda=${QAD_VERIFY_CUDA:-auto}
     if [ "$cuda" != no ]; then
-      if l2_ssh 'if exist C:\qad\venv\Scripts\python.exe (exit 0) else (exit 1)' 2>/dev/null; then
+      local venv_rc=0
+      l2_ssh 'if exist C:\qad\venv\Scripts\python.exe (exit 0) else (exit 1)' 2>/dev/null || venv_rc=$?
+      if [ "$venv_rc" -eq 0 ]; then
         if l2_ssh 'C:\qad\venv\Scripts\python.exe C:\qad\pytorch-offline-bench.py' >"$W/verify-cuda.log" 2>&1; then
           echo "CUDA=PASS $(grep '^RESULT' "$W/verify-cuda.log" | tail -1)"
         else
           echo "CUDA=FAIL $(tail -n 2 "$W/verify-cuda.log" | tr '\n' ' ')"; rc=1
         fi
+      elif [ "$venv_rc" -eq 255 ]; then
+        # ssh itself failed: say so instead of "torch not staged" (live E2E 2026-10-06, sshd down)
+        echo "CUDA=SKIP (L2 not reachable over SSH; torch status unknown)"; rc=1
       elif [ "$cuda" = yes ]; then
         printf '%s\n' 'CUDA=FAIL (no C:\qad\venv with torch in L2)'; rc=1
       else
@@ -506,6 +525,7 @@ case "$step" in
   dkms) step_dkms ;;
   qemu-ad-build) step_qemu_ad_build ;;
   qemu-ad-check) step_qemu_ad_check ;;
+  qemu-ad-libs) step_qemu_ad_libs "${@:2}" ;;
   vfio) step_vfio ;;
   scripts) step_scripts ;;
   check-kvm) step_check_kvm ;;

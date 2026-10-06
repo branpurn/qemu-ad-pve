@@ -55,7 +55,7 @@ case "$QAD_L2_SOURCE" in
   iso)
     WINCD=$(find_win_cd) || fail "Windows ISO with label '$QAD_WIN_ISO_LABEL' not found among L1 CD drives"
     WD=$(WIN_DISK_ALLOW_BLANK=1 "$W/resolve-windows-disk.sh") || fail "no safe target disk (see resolver output above)"
-    if lsblk -no FSTYPE "$WD" | grep -q .; then
+    if grep -q . <<<"$(lsblk -no FSTYPE "$WD")"; then  # not `lsblk | grep -q` (SIGPIPE + pipefail)
       fail "$WD is not blank (a previous, unfinished install?). To start over: setup.sh install --redo l2_install --wipe-l2-disk"
     fi
     CDS+=(-drive "file=$WINCD,format=raw,if=none,id=wincd,media=cdrom,readonly=on" -device "ide-cd,drive=wincd,bus=ide.0")

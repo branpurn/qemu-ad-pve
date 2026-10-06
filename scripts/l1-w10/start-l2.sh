@@ -23,12 +23,12 @@ KVM_PATCH_RE=${KVM_PATCH_RE:-l1-dkms|kvmpatch}
 if [ "${ALLOW_STOCK_KVM:-0}" != "1" ]; then
   ver=$(cat /sys/module/kvm/version 2>/dev/null || echo none)
   file=$(modinfo -F filename kvm 2>/dev/null || echo none)
-  if ! printf '%s\n' "$ver" | grep -Eq -- "$KVM_PATCH_RE"; then
+  if ! [[ $ver =~ $KVM_PATCH_RE ]]; then
     echo "REFUSING start: kvm version='$ver' (want /$KVM_PATCH_RE/). file=$file" >&2
     echo "Patched KVM is the permanent default; load it or set ALLOW_STOCK_KVM=1 for temporary stock." >&2
     exit 80
   fi
-  echo "$file" | grep -q "/updates/dkms/" || {
+  [[ $file == */updates/dkms/* ]] || {
     echo "REFUSING start: kvm not from updates/dkms ($file)" >&2
     exit 81
   }

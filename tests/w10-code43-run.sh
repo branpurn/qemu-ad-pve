@@ -50,7 +50,8 @@
 #      With --ssh-direct only Windows PowerShell 5.1 is needed (no Subsystem line).
 #   4. Optional: default shell for the OpenSSH server (registry HKLM:\SOFTWARE\OpenSSH, DefaultShell)
 #      may be cmd.exe (the default) - fine for --ssh-direct, which works with either shell.
-#   On the machine running this script: PowerShell 7 (`pwsh`) and an ssh client are required; jq is optional.
+#   On the machine running this script: PowerShell 7 (`pwsh`) and an ssh client are required; jq is optional
+#   (JSON parsing falls back to pwsh, then python3).
 #
 # EXAMPLES
 #   w10-code43-run.sh win10-guest.example Administrator --key /path/to/private_key
@@ -155,6 +156,10 @@ if [ -n "$json" ]; then
   elif command -v pwsh >/dev/null 2>&1; then
     # shellcheck disable=SC2016  # PowerShell code, not bash
     result="$(printf '%s' "$json" | pwsh -NoProfile -NonInteractive -Command '$j = [Console]::In.ReadToEnd() | ConvertFrom-Json; $j.result' 2>/dev/null)" || result=""
+  elif command -v python3 >/dev/null 2>&1; then
+    # L1 (Debian, setup.sh) has neither jq nor pwsh; without this fallback a valid
+    # {"result":"ok"} was reported as "no valid JSON" (live E2E 2026-10-06).
+    result="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "")' 2>/dev/null)" || result=""
   fi
 fi
 

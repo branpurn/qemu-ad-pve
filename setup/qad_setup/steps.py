@@ -126,10 +126,14 @@ def s_ssh_key(c: Ctx) -> str:
 
 
 def _download(c: Ctx, url: str, dest: str) -> None:
+    # Bounded connect/read timeouts: on the live E2E host (2026-10-06) one of cloud.debian.org's mirror
+    # addresses dropped SYNs and wget's default (kernel SYN retries, ~2 min per attempt) stalled each
+    # download for minutes before it fell over to the next address.
     if os.path.exists("/usr/bin/wget") or c.dry:
-        c.runner.run(["wget", "-q", "-O", dest, url], desc="download", timeout=3600)
+        c.runner.run(["wget", "-q", "--timeout=30", "--tries=5", "-O", dest, url], desc="download", timeout=3600)
     else:
-        c.runner.run(["curl", "-fsSL", "-o", dest, url], desc="download", timeout=3600)
+        c.runner.run(["curl", "-fsSL", "--connect-timeout", "30", "--retry", "5", "-o", dest, url],
+                     desc="download", timeout=3600)
 
 
 def s_debian_image(c: Ctx) -> str:
@@ -399,11 +403,62 @@ def s_l1_qemu_ad(c: Ctx) -> str:
     else:
         c.l1("qemu-ad-build", timeout=4 * 3600)
     if c.dry:
+        if mode == "copy" or (mode == "auto" and c.host_qemu_ad):
+            ui.info("would install (in L1) the Debian packages of any host library the copied binary lacks "
+                    "(`qad-l1.sh qemu-ad-libs`, package names from `dpkg -S` on the host)")
         return "dry"
     p = c.ssh_probe(f"{L1_QAD} qemu-ad-check")
+    missing = _missing_libs(p.stdout if p else "")
+    if missing and (mode == "copy" or (mode == "auto" and c.host_qemu_ad)):
+        # The host binary links against PVE's library set (live E2E 2026-10-06: libgcrypt.so.20 and
+        # libiscsi.so.7 were absent from a fresh Debian 13 L1). PVE 9 and Debian 13 share the archive,
+        # so the host's own package names are the right ones to install in L1.
+        pkgs = host_lib_packages(c, missing)
+        ui.info(f"copied binary lacks {' '.join(missing)}: installing {' '.join(pkgs)} in L1")
+        c.l1("qemu-ad-libs " + " ".join(pkgs), timeout=1800)
+        p = c.ssh_probe(f"{L1_QAD} qemu-ad-check")
     if p is None or p.returncode != 0:
-        raise StepError(f"qemu-ad-pve in L1 not usable: {(p.stdout if p else '').strip()}")
+        raise StepError(f"qemu-ad-pve in L1 not usable: {_check_detail(p.stdout if p else '')}")
     return p.stdout.strip().splitlines()[-1]
+
+
+def _check_detail(out: str) -> str:
+    """The useful part of a qad-l1.sh check's output, without its '=== qad-l1.sh <step> <date>' banner.
+
+    The state file keeps only the first line of a failure; live E2E 2026-10-06 recorded just the banner
+    ('not usable: === qad-l1.sh qemu-ad-check ...') and hid 'QEMU_AD=libs-missing ...'.
+    """
+    lines = [l.strip() for l in out.splitlines() if l.strip() and not l.startswith("=== ")]
+    return "; ".join(lines) or "(no output)"
+
+
+def _missing_libs(check_out: str) -> List[str]:
+    """Library sonames from `qad-l1.sh qemu-ad-check` output ('QEMU_AD=libs-missing a.so.1 b.so.2')."""
+    m = re.search(r"^QEMU_AD=libs-missing (.+)$", check_out, re.M)
+    return sorted(set(m.group(1).split())) if m else []
+
+
+_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]+$")
+
+
+def host_lib_packages(c: Ctx, libs: List[str]) -> List[str]:
+    """Map sonames to the Debian packages that ship them on this (PVE = Debian) host, via `dpkg -S`."""
+    pkgs = set()
+    for lib in libs:
+        if not re.match(r"^[A-Za-z0-9_.+-]+$", lib):
+            raise StepError(f"unexpected library name {lib!r}")
+        p = c.runner.probe(["dpkg", "-S", f"*/{lib}"])
+        found = ""
+        for line in p.stdout.splitlines():
+            owners, _, path = line.partition(": ")
+            if path.strip().endswith("/" + lib):
+                found = owners.split(",")[0].strip().split(":")[0]
+                break
+        if not found or not _PKG_RE.match(found):
+            raise StepError(f"the copied qemu-ad binary needs {lib}, which no host package provides; "
+                            "use l1.qemu_ad=build")
+        pkgs.add(found)
+    return sorted(pkgs)
 
 
 def s_l1_vfio(c: Ctx) -> str:

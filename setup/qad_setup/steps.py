@@ -418,8 +418,18 @@ def s_l1_qemu_ad(c: Ctx) -> str:
         c.l1("qemu-ad-libs " + " ".join(pkgs), timeout=1800)
         p = c.ssh_probe(f"{L1_QAD} qemu-ad-check")
     if p is None or p.returncode != 0:
-        raise StepError(f"qemu-ad-pve in L1 not usable: {(p.stdout if p else '').strip()}")
+        raise StepError(f"qemu-ad-pve in L1 not usable: {_check_detail(p.stdout if p else '')}")
     return p.stdout.strip().splitlines()[-1]
+
+
+def _check_detail(out: str) -> str:
+    """The useful part of a qad-l1.sh check's output, without its '=== qad-l1.sh <step> <date>' banner.
+
+    The state file keeps only the first line of a failure; live E2E 2026-10-06 recorded just the banner
+    ('not usable: === qad-l1.sh qemu-ad-check ...') and hid 'QEMU_AD=libs-missing ...'.
+    """
+    lines = [l.strip() for l in out.splitlines() if l.strip() and not l.startswith("=== ")]
+    return "; ".join(lines) or "(no output)"
 
 
 def _missing_libs(check_out: str) -> List[str]:

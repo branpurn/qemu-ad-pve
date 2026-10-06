@@ -270,3 +270,9 @@ def test_l1_qemu_ad_installs_missing_libs_after_copy(tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
     assert steps.s_l1_qemu_ad(c) == "QEMU_AD=QEMU emulator version 10.2.2"
     assert any("qad-l1.sh qemu-ad-libs libgcrypt20" in " ".join(a) for a in c.runner.ran)
+
+
+def test_check_detail_drops_banner():
+    out = "=== qad-l1.sh qemu-ad-check 2026-10-06T12:47:41+00:00\nQEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7\n"
+    assert steps._check_detail(out) == "QEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7"
+    assert steps._check_detail("") == "(no output)"

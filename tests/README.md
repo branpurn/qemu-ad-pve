@@ -65,17 +65,20 @@ set `STRICT_WINDOW=1` to make it a `FAIL`. An empty `PREFIX` is *not* a purge-re
 | What it does **not** change | The other guard checks: `QAD_T15_SANDBOX=1`, `qm` on `PATH` (use `PATH` to control that), the installed `pve-qemu-kvm` package (looked up with `dpkg-query` on `PATH`), and `id -u` = 0. |
 | Who uses it | Only `tier15-guard-test.sh`, which points it at a fake root so the guard's refusals can be tested without a PVE node and without root. `tier1.sh`, `tier2.sh` and the three `tier15-*.sh` scripts do not use it or set it. |
 
-**Do not set it in a real run.** Pointing it at an empty directory makes the guard stop looking at the real `/usr/sbin/qm` and
-`/etc/pve`, which disables the "this looks like a PVE node" tripwire.
+**Do not set it in a real run.** It redirects only the seven file-existence probes listed above (the six `qm` paths and `/etc/pve`) to
+the fake root, so with it set the guard no longer looks at the real `/usr/sbin/qm`, `/etc/pve` and the other real paths. Everything else
+still runs against the real system: the `QAD_T15_SANDBOX=1` confirmation, the `qm`-on-`PATH` check, the installed-`pve-qemu-kvm`-package
+check and the root check. So a PVE node would still be caught if `qm` is on `PATH` or the package is installed, but not by the file probes. Leave
+it unset for any real run so that all checks look at the real filesystem.
 
 Hermetic usage (what `tier15-guard-test.sh` does; runs unprivileged and touches only the temp dir). The guard is *called*, never
-the tier-1.5 scripts:
+the tier-1.5 scripts. **Run this from the repository root** (the snippet sources `tests/tier15-common.sh` relative to the current directory):
 
 ```bash
 fake=$(mktemp -d); mkdir -p "$fake/fs/usr/sbin" "$fake/fs/etc" "$fake/stub"
 : > "$fake/fs/usr/sbin/qm"                       # pretend this root is a PVE node
 env -i PATH="$fake/stub:/usr/bin:/bin" T15_FS_ROOT="$fake/fs" QAD_T15_SANDBOX=1 \
-  bash -c 'source tests/tier15-common.sh; t15_guard; echo GUARD-PASSED'
+  bash -c 'source "$1/tier15-common.sh"; t15_guard; echo GUARD-PASSED' _ "$PWD/tests"
 # -> refusing: /usr/sbin/qm exists, this looks like a PVE node      (exit 2, no GUARD-PASSED)
 rm -rf "$fake"
 ```

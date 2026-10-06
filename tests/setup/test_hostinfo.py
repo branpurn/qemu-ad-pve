@@ -82,3 +82,32 @@ def test_guest_ifaces_prefers_mac_and_skips_lo_link_local():
     assert hi.parse_guest_ifaces(text, "BC:24:11:12:34:56") == ["192.168.1.77", "10.254.77.1"]
     assert hi.parse_guest_ifaces(json.dumps({"result": json.loads(text)})) == ["10.254.77.1", "192.168.1.77"]
     assert hi.parse_guest_ifaces("not json") == []
+
+
+# ---------------------------------------------------------------- bridges incl. Open vSwitch (live QA: vmbr1 is OVS)
+def test_bridge_parsers():
+    assert hi.parse_ovs_list_br("vmbr1\n\nvmbr2\n") == ["vmbr1", "vmbr2"]
+    assert hi.parse_ip_link_names(fix("ip-o-link.txt")) == ["lo", "eno1", "ovs-system", "vmbr0", "vmbr1",
+                                                            "vmbr0.10", "fwbr9200i0"]
+    assert hi.parse_interfaces_bridges(fix("interfaces-ovs.txt")) == {"vmbr0": "linux", "vmbr1": "ovs", "vmbr9": "ovs"}
+    # bridge_ports (underscore form), OVS wins over a stray bridge-ports, comments ignored, auto ends a stanza
+    txt = ("iface br1 inet manual\n  bridge_ports none\n"
+           "iface vmbr5 inet manual\n  ovs_type OVSBridge\n  bridge-ports x\n"
+           "iface vmbr6 inet manual\n  # ovs_type OVSBridge\n"
+           "auto vmbr7\n  ovs_type OVSBridge\n")
+    assert hi.parse_interfaces_bridges(txt) == {"br1": "linux", "vmbr5": "ovs"}
+
+
+def test_detect_bridges_linux_and_ovs(tmp_path):
+    root = make_sysroot(tmp_path)
+    kinds, down = hi.detect_bridges(str(root), "vmbr1\n", fix("ip-o-link.txt"))
+    assert kinds == {"vmbr0": "linux", "vmbr1": "ovs"} and down == ["vmbr9"]
+    # ovs-vsctl missing/failed: still found via ovs_type OVSBridge + the netdev in sysfs
+    assert hi.detect_bridges(str(root), "", "") == ({"vmbr0": "linux", "vmbr1": "ovs"}, ["vmbr9"])
+    # netdev only visible in `ip link` (no sysfs entry, e.g. other sysroot)
+    (root / "sys/class/net/vmbr1").rmdir()
+    assert hi.detect_bridges(str(root), "", fix("ip-o-link.txt"))[0] == {"vmbr0": "linux", "vmbr1": "ovs"}
+    assert hi.detect_bridges(str(root), "", "") == ({"vmbr0": "linux"}, ["vmbr1", "vmbr9"])
+    # firewall/tap helper bridges are never offered
+    (root / "sys/class/net/fwbr9200i0/bridge").mkdir(parents=True)
+    assert "fwbr9200i0" not in hi.detect_bridges(str(root))[0]

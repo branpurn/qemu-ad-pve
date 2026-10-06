@@ -54,6 +54,9 @@ def make_sysroot(root: Path, pci=None, nested="1", confs=("vm-100.conf", "vm-101
     br = root / "sys/class/net/vmbr0/bridge"
     br.mkdir(parents=True)
     (root / "sys/class/net/eno1").mkdir(parents=True)
+    (root / "sys/class/net/vmbr1").mkdir(parents=True)  # Open vSwitch bridge: a netdev without bridge/
+    (root / "etc/network").mkdir(parents=True)
+    (root / "etc/network/interfaces").write_text(fix("interfaces-ovs.txt"))
     qs = root / "etc/pve/qemu-server"
     qs.mkdir(parents=True)
     for c in confs:
@@ -83,6 +86,8 @@ case "$cmd $*" in
   "pvesm path local:iso/"*) echo "{iso_dir}/$(echo "$2" | sed 's#local:iso/##')" ;;
   "pvesm path local:snippets/"*) echo "/var/lib/vz/snippets/$(echo "$2" | sed 's#local:snippets/##')" ;;
   "blkid"*) echo CCCOMA_X64FRE_EN-US_DV9 ;;
+  "ovs-vsctl list-br"*) echo vmbr1 ;;
+  "ip -o link show"*) cat "$F/ip-o-link.txt" ;;
   *) echo "stub: unexpected $cmd $*" >&2; exit 99 ;;
 esac
 """
@@ -91,7 +96,7 @@ esac
 def make_stubs(bindir: Path, iso_dir: Path) -> Path:
     bindir.mkdir(parents=True, exist_ok=True)
     body = STUB.replace("{fix}", str(FIX)).replace("{iso_dir}", str(iso_dir))
-    for name in ("pveversion", "hostname", "lspci", "qm", "pvesh", "pvesm", "blkid"):
+    for name in ("pveversion", "hostname", "lspci", "qm", "pvesh", "pvesm", "blkid", "ovs-vsctl", "ip"):
         f = bindir / name
         f.write_text(body)
         f.chmod(f.stat().st_mode | stat.S_IEXEC)

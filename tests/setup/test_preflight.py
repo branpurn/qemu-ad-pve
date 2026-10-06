@@ -135,3 +135,20 @@ def test_helpers(tmp_path):
     assert pf.choose_storage(s.storages["iso"], prefer=("local",)) == "local"
     assert pf.choose_storage([]) is None
     assert pf.needed_gib(cfg(), s) > 175
+
+
+def test_bridge_ovs_linux_down_and_missing(tmp_path):
+    s = snapshot(tmp_path)
+    s.bridge_kinds = {"vmbr0": "linux", "vmbr1": "ovs"}
+    s.bridges, s.bridges_down = list(s.bridge_kinds), ["vmbr9"]
+    gpu = pf.pick_gpu(s, "0000:01:00")
+    c = by_name(pf.evaluate(cfg(l1__bridge="vmbr1"), s, "9201", gpu))["Bridge"]
+    assert (c.status, c.detail) == ("PASS", "vmbr1 (Open vSwitch)")
+    c = by_name(pf.evaluate(cfg(), s, "9201", gpu))["Bridge"]
+    assert (c.status, c.detail) == ("PASS", "vmbr0 (Linux bridge)")
+    c = by_name(pf.evaluate(cfg(l1__bridge="vmbr9"), s, "9201", gpu))["Bridge"]
+    assert c.status == "WARN" and "ifreload -a" in c.fix
+    c = by_name(pf.evaluate(cfg(l1__bridge="vmbr7"), s, "9201", gpu))["Bridge"]
+    assert c.status == "FAIL" and "ovs-vsctl list-br" in c.detail and c.fix == "Choose one of: vmbr0, vmbr1 (OVS)"
+    s.bridge_kinds, s.bridges, s.bridges_down = {}, [], []
+    assert by_name(pf.evaluate(cfg(), s, "9201", gpu))["Bridge"].status == "WARN"  # cannot verify, no false FAIL

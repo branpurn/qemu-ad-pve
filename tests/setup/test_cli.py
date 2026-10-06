@@ -17,6 +17,24 @@ def test_normalize_argv():
     assert cli.normalize_argv(["--dry-run", "verify"]) == ["verify", "--dry-run"]
     assert cli.normalize_argv(["--config", "status", "-y"]) == ["install", "--config", "status", "-y"]
     assert cli.normalize_argv(["--help"]) == ["--help"]
+    # top-level --dry-run / -n is `install --dry-run` (docs/SETUP.md; live QA 2026-10-05 reported a mismatch)
+    assert cli.normalize_argv(["--dry-run"]) == ["install", "--dry-run"]
+    assert cli.normalize_argv(["-n", "-y"]) == ["install", "-n", "-y"]
+    assert cli.normalize_argv(["--no-color", "--dry-run", "-y"]) == ["install", "--no-color", "--dry-run", "-y"]
+
+
+def test_top_level_dry_run_aliases(stub_env):
+    for flag in ("--dry-run", "-n"):
+        p = run(stub_env, flag, "--yes", "--set", "stage.nvidia_driver=/nonexistent/nv.exe")
+        assert p.returncode == 0, p.stderr + p.stdout
+        assert "nothing was executed" in p.stdout and "qm create 9201 " in p.stdout
+        assert not stub_env["state"].exists()
+
+
+def test_preflight_accepts_ovs_bridge(stub_env):
+    p = run(stub_env, "preflight", "--yes", "--set", "l1.bridge=vmbr1")
+    line = [l for l in p.stdout.splitlines() if " Bridge " in f" {l} "]
+    assert line and line[0].startswith("PASS") and "vmbr1 (Open vSwitch)" in line[0], p.stdout
 
 
 def test_preflight_lists_gpus_and_fails_only_on_root(stub_env):

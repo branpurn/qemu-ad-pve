@@ -1,10 +1,14 @@
 #!/bin/bash
 # Resolve the Windows L2 disk at runtime. Prefer stable identity over device name.
-# Priority: ID_SERIAL_SHORT=drive-scsi1 -> NTFS LABEL=Windows / UUID -> size~80G+ntfs.
+# Priority: ID_SERIAL_SHORT=drive-scsi1 -> NTFS UUID (only if WIN_DISK_UUID is set) / LABEL=Windows
+# -> NTFS + size window.
 # Refuse: any mountpoint under the disk, any ext4 partition, ambiguous multi-match.
 #
-# Environment (defaults = the lab disk):
-#   WIN_DISK_SERIAL / WIN_DISK_LABEL / WIN_DISK_UUID   identities to score
+# Environment (serial default drive-scsi1 = the setup.sh/qm layout; label/size defaults = the lab disk):
+#   WIN_DISK_SERIAL / WIN_DISK_LABEL / WIN_DISK_UUID   identities to score (WIN_DISK_UUID has no
+#                                                   default: greenfield installs rely on the serial;
+#                                                   the lab VM 9200 value lives in
+#                                                   scripts/l1-w10/qemu-ad-l2.env.lab-9200.example)
 #   WIN_DISK_MIN_GB / WIN_DISK_MAX_GB                 size window for the ntfs+size heuristic
 #                                                   (defaults 70/90 for the lab ~80G disk; setup.sh
 #                                                   writes ±20% of l2.disk_gb into /etc/qemu-ad-l2.env)
@@ -15,7 +19,7 @@ set -euo pipefail
 
 prefer_serial="${WIN_DISK_SERIAL:-drive-scsi1}"
 prefer_label="${WIN_DISK_LABEL:-Windows}"
-prefer_uuid="${WIN_DISK_UUID:-762491EA2491AE1D}"
+prefer_uuid="${WIN_DISK_UUID:-}"
 min_bytes=$(( ${WIN_DISK_MIN_GB:-70} * 1024 * 1024 * 1024 ))
 max_bytes=$(( ${WIN_DISK_MAX_GB:-90} * 1024 * 1024 * 1024 ))
 allow_blank="${WIN_DISK_ALLOW_BLANK:-0}"
@@ -56,18 +60,22 @@ is_refused() {
   return 1
 }
 
+lsblk_has() { # COLUMN VALUE DISK -> 0 if any row of DISK (disk or partition) has COLUMN == VALUE
+  lsblk -no "$1" "$3" 2>/dev/null | sed 's/[[:space:]]*$//' | grep -qxF -- "$2"
+}
+
 for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
   if is_refused "$d"; then continue; fi
   serial=$(udevadm info --query=property --name="$d" 2>/dev/null | awk -F= '/^ID_SERIAL_SHORT=/{print $2}')
   size=$(blockdev --getsize64 "$d" 2>/dev/null || echo 0)
+  # One column per lsblk call: with "-no FSTYPE,LABEL,UUID" an empty LABEL collapses under `read`
+  # and the UUID would be compared as the label.
   has_ntfs=0
   has_label=0
   has_uuid=0
-  while read -r fs lab uuid; do
-    [ "$fs" = "ntfs" ] && has_ntfs=1
-    [ "$lab" = "$prefer_label" ] && has_label=1
-    [ "$uuid" = "$prefer_uuid" ] && has_uuid=1
-  done < <(lsblk -no FSTYPE,LABEL,UUID "$d" 2>/dev/null)
+  lsblk_has FSTYPE ntfs "$d" && has_ntfs=1
+  [ -n "$prefer_label" ] && lsblk_has LABEL "$prefer_label" "$d" && has_label=1
+  [ -n "$prefer_uuid" ] && lsblk_has UUID "$prefer_uuid" "$d" && has_uuid=1
 
   score=0
   w=""

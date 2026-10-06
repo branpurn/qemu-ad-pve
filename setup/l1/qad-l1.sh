@@ -487,12 +487,17 @@ step_verify() {
     esac
     local cuda=${QAD_VERIFY_CUDA:-auto}
     if [ "$cuda" != no ]; then
-      if l2_ssh 'if exist C:\qad\venv\Scripts\python.exe (exit 0) else (exit 1)' 2>/dev/null; then
+      local venv_rc=0
+      l2_ssh 'if exist C:\qad\venv\Scripts\python.exe (exit 0) else (exit 1)' 2>/dev/null || venv_rc=$?
+      if [ "$venv_rc" -eq 0 ]; then
         if l2_ssh 'C:\qad\venv\Scripts\python.exe C:\qad\pytorch-offline-bench.py' >"$W/verify-cuda.log" 2>&1; then
           echo "CUDA=PASS $(grep '^RESULT' "$W/verify-cuda.log" | tail -1)"
         else
           echo "CUDA=FAIL $(tail -n 2 "$W/verify-cuda.log" | tr '\n' ' ')"; rc=1
         fi
+      elif [ "$venv_rc" -eq 255 ]; then
+        # ssh itself failed: say so instead of "torch not staged" (live E2E 2026-10-06, sshd down)
+        echo "CUDA=SKIP (L2 not reachable over SSH; torch status unknown)"; rc=1
       elif [ "$cuda" = yes ]; then
         printf '%s\n' 'CUDA=FAIL (no C:\qad\venv with torch in L2)'; rc=1
       else

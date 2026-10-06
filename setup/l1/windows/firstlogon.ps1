@@ -52,8 +52,24 @@ if (-not $svc) {
   }
 }
 if ($svc) {
+  # Host keys made by `ssh-keygen -A` in this (elevated) user session are OWNED BY THE USER (qad), and
+  # the user keeps an ACE on them. sshd runs as LocalSystem and refuses such private host keys (owner
+  # must be SYSTEM or Administrators, nobody else may read them), so the service does not start at all
+  # (live E2E 2026-10-06: "Start-Service : Failed to start service", port 22 never opened).
+  # Owner -> Administrators, ACL -> SYSTEM + Administrators only. SIDs: works in any display language.
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  Get-ChildItem C:\ProgramData\ssh\ssh_host_*_key -ErrorAction SilentlyContinue | ForEach-Object {
+    icacls $_.FullName /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+    icacls $_.FullName /setowner '*S-1-5-32-544' | Out-Null
+    icacls $_.FullName /remove:g "*$me" | Out-Null
+  }
   Set-Service sshd -StartupType Automatic
-  Start-Service sshd
+  $sshdUp = $false
+  foreach ($i in 1..3) {
+    Start-Service sshd -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    if ((Get-Service sshd).Status -eq 'Running') { $sshdUp = $true; break }
+  }
   New-NetFirewallRule -Name 'qad-sshd' -DisplayName 'OpenSSH (qemu-ad-pve L1 link)' -Direction Inbound `
     -Protocol TCP -LocalPort 22 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
   New-Item -ItemType Directory -Force -Path C:\ProgramData\ssh | Out-Null
@@ -61,7 +77,15 @@ if ($svc) {
   Copy-Item C:\qad\authorized_keys $ak -Force
   # SIDs, so it works on any display language: Administrators, SYSTEM
   icacls $ak /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
-  Write-Output 'sshd running, key-only access for L1'
+  if ($sshdUp) {
+    Write-Output 'sshd running, key-only access for L1'
+  } else {
+    # Do not claim success: say why (config/host-key check as this user; the service runs as SYSTEM).
+    Write-Output 'ERROR: sshd service does not start; setup.sh verify will not reach the L2. sshd -t:'
+    $exe = (Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName.Trim('"')
+    & $exe -t 2>&1 | ForEach-Object { Write-Output "  $_" }
+    icacls C:\ProgramData\ssh\ssh_host_*_key
+  }
 }
 
 # ---- 4. Python + wheels (offline)

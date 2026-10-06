@@ -41,12 +41,14 @@ is_blank() {
 is_refused() {
   local d="$1"
   # mounted anywhere on this disk?
-  if lsblk -no MOUNTPOINT "$d" 2>/dev/null | grep -q .; then
+  # Captured output, not `lsblk | grep -q`: with pipefail a SIGPIPE'd lsblk turns a match into a
+  # failure, i.e. a refusal check that silently passes.
+  if grep -q . <<<"$(lsblk -no MOUNTPOINT "$d" 2>/dev/null)"; then
     echo "REFUSE $d: has mounted partition(s)" >&2
     return 0
   fi
   # ext4 anywhere (L1 root signature)
-  if lsblk -no FSTYPE "$d" 2>/dev/null | grep -qx ext4; then
+  if grep -qx ext4 <<<"$(lsblk -no FSTYPE "$d" 2>/dev/null)"; then
     echo "REFUSE $d: has ext4 filesystem (likely L1 root)" >&2
     return 0
   fi
@@ -61,7 +63,7 @@ is_refused() {
 }
 
 lsblk_has() { # COLUMN VALUE DISK -> 0 if any row of DISK (disk or partition) has COLUMN == VALUE
-  lsblk -no "$1" "$3" 2>/dev/null | sed 's/[[:space:]]*$//' | grep -qxF -- "$2"
+  grep -qxF -- "$2" <<<"$(lsblk -no "$1" "$3" 2>/dev/null | sed 's/[[:space:]]*$//')"
 }
 
 for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
@@ -122,7 +124,7 @@ if is_refused "$WD"; then
 fi
 # must still look like Windows (or, for an install, be the blank disk with the exact serial)
 if [ -z "${blank[$WD]:-}" ]; then
-  lsblk -no FSTYPE "$WD" | grep -q ntfs || { echo "FATAL: $WD has no NTFS" >&2; exit 93; }
+  grep -q ntfs <<<"$(lsblk -no FSTYPE "$WD")" || { echo "FATAL: $WD has no NTFS" >&2; exit 93; }
 fi
 
 echo "RESOLVED Windows disk=$WD score=$top_score (${why[$WD]})" >&2

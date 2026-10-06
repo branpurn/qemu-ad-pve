@@ -328,6 +328,7 @@ def cmd_install(app: App) -> int:
             app.manifest.add("dir", path=app.root)
         app.manifest.add("dir", path=app.setup_dir)
         app.open_log()
+        _track_log(app)  # also records setup/logs/ itself (open_log creates it before s_host_dirs runs)
         saved = os.path.join(app.setup_dir, "config.ini")
         app.runner.write_file(saved, cfg.to_ini(), mode=0o600, desc="answers (no secrets)")
         for p in (saved, app.state.path):
@@ -403,11 +404,25 @@ def cmd_status(app: App) -> int:
     return 0
 
 
+def _track_log(app: App) -> None:
+    """Record the current run's log (and setup/logs/) in the manifest so `uninstall` removes it.
+
+    Before (live E2E 2026-10-06): only install logs were recorded and setup/logs/ itself never was,
+    so after `setup.sh verify` + `uninstall` the host kept /var/lib/qemu-ad/setup/logs/verify-*.log.
+    """
+    if app.args.dry_run or app.manifest is None or not app.runner.log_path:
+        return
+    app.manifest.add("dir", path=os.path.dirname(app.runner.log_path))
+    app.manifest.add("file", path=app.runner.log_path)
+    app.manifest.save()
+
+
 def cmd_verify(app: App) -> int:
     if (rc := _need_install(app)) is not None:
         return rc
     ctx = _ctx_for(app)
     app.open_log()
+    _track_log(app)
     if "l1_ip" not in app.state.facts:
         ui.error("L1 address unknown (install did not get that far)")
         return 1

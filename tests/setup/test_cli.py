@@ -120,3 +120,19 @@ def test_pick_windows_iso_skips_virtio_and_unattend():
         == "local:iso/en-us_windows_10_business_editions_22h2_x64_dvd.iso"
     assert cli.pick_windows_iso(["local:iso/virtio-win.iso", "local:iso/windows-unattend.iso"]) is None
     assert cli.pick_windows_iso([]) is None
+
+
+def test_verify_log_is_recorded_for_uninstall(stub_env, monkeypatch):
+    # live E2E 2026-10-06: verify-*.log (and setup/logs/) were not in the manifest -> left behind by uninstall
+    from qad_setup import manifest as manifest_mod
+    state = stub_env["state"]
+    monkeypatch.setattr(manifest_mod, "SAFE_PREFIXES", (str(state) + "/",))
+    m = Manifest(install_id="abc123", path=str(state / "manifest.json"))
+    m.add("dir", path=str(state / "setup"))
+    m.save()
+    rc = cli.main(["verify", "--sysroot", str(stub_env["root"]), "--state-dir", str(state)])
+    assert rc == 1  # no L1 address recorded
+    got = {(e["kind"], e["path"]) for e in json.loads((state / "manifest.json").read_text())["entries"]}
+    assert ("dir", str(state / "setup" / "logs")) in got
+    logs = [p for k, p in got if k == "file" and p.startswith(str(state / "setup" / "logs" / "verify-"))]
+    assert len(logs) == 1 and os.path.exists(logs[0])

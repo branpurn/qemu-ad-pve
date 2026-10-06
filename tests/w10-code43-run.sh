@@ -27,6 +27,8 @@
 #
 # ENVIRONMENT
 #   W10_CHECK_PS1   path of the check script (default: w10-code43-check.ps1 in the same directory as this script)
+#   W10_KNOWN_HOSTS      (--ssh-direct) dedicated known_hosts file; enables W10_STRICT_HOST_KEY
+#   W10_STRICT_HOST_KEY  yes (default) or accept-new; used only with W10_KNOWN_HOSTS
 #
 # SECURITY: key auth / ssh-agent only. No password is accepted on the command line or stored.
 #   BatchMode is requested so ssh never blocks on a password prompt.
@@ -120,6 +122,14 @@ else
   command -v scp >/dev/null 2>&1 || die "scp not found" 127
 
   ssh_opts=(-o BatchMode=yes -o ConnectTimeout=20)
+  # Optional host-key pinning (setup/l1/qad-l1.sh): dedicated known_hosts + policy.
+  if [ -n "${W10_KNOWN_HOSTS:-}" ]; then
+    case "${W10_STRICT_HOST_KEY:-yes}" in
+      yes|accept-new) ;;
+      *) die "W10_STRICT_HOST_KEY must be yes or accept-new" 64 ;;
+    esac
+    ssh_opts+=(-o "UserKnownHostsFile=${W10_KNOWN_HOSTS}" -o "StrictHostKeyChecking=${W10_STRICT_HOST_KEY:-yes}")
+  fi
   [ -n "$key" ] && ssh_opts+=(-i "$key" -o IdentitiesOnly=yes)
   target="${user}@${host}"
 

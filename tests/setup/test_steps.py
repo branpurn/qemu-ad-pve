@@ -1,4 +1,5 @@
 """Host-side step logic with a fake runner (no PVE needed)."""
+import os
 import subprocess
 
 import pytest
@@ -147,3 +148,88 @@ def test_pr24_unit_adapted_to_other_bdfs_only(tmp_path):
     assert len(unit.splitlines()) == len(orig_unit.splitlines())
     diff = [(a, b) for a, b in zip(orig_helper.splitlines(), helper.splitlines()) if a != b]
     assert len(diff) == 2
+
+
+# ---------------------------------------------------------------- L2 SSH host-key pinning (qad-l1.sh)
+_FAKE_SSH = r'''#!/usr/bin/env python3
+import os, sys
+a = sys.argv[1:]
+opts = dict(a[i + 1].split("=", 1) for i, x in enumerate(a) if x == "-o")
+known, policy, key = opts["UserKnownHostsFile"], opts["StrictHostKeyChecking"], os.environ["FAKE_HOSTKEY"]
+open(os.environ["FAKE_LOG"], "a").write(policy + "\n")
+if os.environ.get("FAKE_DOWN"):
+    sys.exit(255)
+have = open(known).read().strip() if os.path.exists(known) else ""
+if have and have != key:
+    sys.exit(255)  # changed host key
+if not have:
+    if policy != "accept-new":
+        sys.exit(255)
+    open(known, "w").write(key + "\n")
+sys.exit(int(os.environ.get("FAKE_RC", "0")))
+'''
+_FAKE_KEYGEN = r'''#!/usr/bin/env python3
+import hashlib, sys
+print("256 SHA256:" + hashlib.sha256(open(sys.argv[-1], "rb").read()).hexdigest()[:20] + " 10.99.0.2 (ED25519)")
+'''
+
+
+def _pin_env(tmp_path):
+    src = (REPO / "setup/l1/qad-l1.sh").read_text()
+    fns = "".join(_re.search(rf"^{n}\(\) \{{.*?^\}}\n", src, _re.S | _re.M).group(0)
+                  for n in ("l2_strict", "l2_forget_hostkey", "l2_pin_hostkey", "l2_ssh"))
+    b = tmp_path / "bin"
+    b.mkdir()
+    for name, body in (("ssh", _FAKE_SSH), ("ssh-keygen", _FAKE_KEYGEN)):
+        (b / name).write_text(body)
+        (b / name).chmod(0o755)
+    w = tmp_path / "w10"
+    w.mkdir()
+    pre = (f"set -euo pipefail\nW={w}; QAD_ADMIN_USER=qad; QAD_L2_IP=10.99.0.2\n"
+           "L2_KNOWN=$W/l2_known_hosts\nL2_PIN=$W/l2_hostkey.pinned\n" + fns)
+    log = tmp_path / "ssh.log"
+
+    def run(cmd, **env):
+        e = dict(os.environ, PATH=f"{b}:{os.environ['PATH']}", FAKE_LOG=str(log),
+                 FAKE_HOSTKEY="10.99.0.2 ssh-ed25519 AAAAkeyA")
+        e.update(env)
+        return subprocess.run(["bash", "-c", pre + cmd], capture_output=True, text=True, env=e, timeout=30)
+    return run, w, log
+
+
+def test_l2_hostkey_pinned_after_first_connect_then_strict(tmp_path):
+    run, w, log = _pin_env(tmp_path)
+    p = run("l2_ssh 'exit 0' || echo rc=$?", FAKE_DOWN="1")  # L2 still booting: nothing pinned
+    assert "rc=255" in p.stdout and not (w / "l2_hostkey.pinned").exists()
+    p = run("l2_ssh 'exit 0'; l2_strict")
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "yes" and "L2 host key pinned: SHA256:" in p.stderr
+    pin = (w / "l2_hostkey.pinned").read_text()
+    assert pin.startswith("256 SHA256:") and oct((w / "l2_hostkey.pinned").stat().st_mode)[-3:] == "600"
+    p = run("l2_ssh 'exit 3' || echo rc=$?", FAKE_RC="3")  # remote command rc is passed through
+    assert "rc=3" in p.stdout
+    assert log.read_text().split() == ["accept-new", "accept-new", "yes"]
+    # a changed key (same IP, new key) is refused once pinned
+    p = run("l2_ssh 'exit 0' || echo rc=$?", FAKE_HOSTKEY="10.99.0.2 ssh-ed25519 AAAAkeyB")
+    assert "rc=255" in p.stdout and (w / "l2_hostkey.pinned").read_text() == pin
+    # a hand-edited known_hosts that no longer matches the pin is refused before ssh runs
+    (w / "l2_known_hosts").write_text("10.99.0.2 ssh-ed25519 AAAAkeyB\n")
+    p = run("l2_ssh 'exit 0' || echo rc=$?", FAKE_HOSTKEY="10.99.0.2 ssh-ed25519 AAAAkeyB")
+    assert "rc=255" in p.stdout and "no longer matches the pinned key" in p.stderr
+    # reinstall/wipe forgets the key -> next first connect pins the new one
+    p = run("l2_forget_hostkey; l2_strict; l2_ssh 'exit 0'; l2_strict", FAKE_HOSTKEY="10.99.0.2 ssh-ed25519 AAAAkeyB")
+    assert p.stdout.split() == ["accept-new", "yes"], p.stderr
+    assert (w / "l2_hostkey.pinned").read_text() != pin
+
+
+def test_l2_hostkey_reset_on_install_and_wipe_and_used_by_verify():
+    src = (REPO / "setup/l1/qad-l1.sh").read_text()
+    for step in ("step_l2_install", "step_l2_wipe"):
+        body = _re.search(rf"^{step}\(\) \{{.*?^\}}\n", src, _re.S | _re.M).group(0)
+        assert "l2_forget_hostkey" in body, step
+    verify = _re.search(r"^step_verify\(\) \{.*?^\}\n", src, _re.S | _re.M).group(0)
+    assert 'W10_KNOWN_HOSTS="$L2_KNOWN" W10_STRICT_HOST_KEY="$(l2_strict)"' in verify
+    assert verify.index("l2_ssh 'exit 0'") < verify.index("w10-code43-run.sh")
+    run_sh = (REPO / "tests/w10-code43-run.sh").read_text()
+    assert '"UserKnownHostsFile=${W10_KNOWN_HOSTS}"' in run_sh
+    assert '"StrictHostKeyChecking=${W10_STRICT_HOST_KEY:-yes}"' in run_sh

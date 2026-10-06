@@ -13,6 +13,11 @@ ENVF=${QAD_ENV:-/etc/qemu-ad/setup.env}
 W=/root/w10
 STAGE=/root/qad-stage
 LOGDIR=/var/log/qemu-ad-setup
+# L2 SSH host key (L1 state): the Windows sshd key only exists after Setup, so the first connect
+# uses accept-new; its fingerprint is then recorded in L2_PIN and every later connection
+# (l2_ssh and the GPU check) uses StrictHostKeyChecking=yes. Reset on reinstall/wipe.
+L2_KNOWN=$W/l2_known_hosts
+L2_PIN=$W/l2_hostkey.pinned
 # dkms/ (kvm-l1, MODULE_VERSION "l1-dkms-0.1") is the ONE canonical patched KVM package.
 KVM_PATCH_RE='l1-dkms'
 L2_UNIT=w10-l2.service  # PR #24's unit (scripts/qm-native-9200/), reused verbatim
@@ -198,6 +203,9 @@ MMIO64_MB=$QAD_MMIO64_MB
 KVM_PATCH_RE='$KVM_PATCH_RE'
 REQUIRE_QEMU_AD=1
 WIN_DISK_SERIAL=drive-scsi1
+# No NTFS UUID on greenfield installs (the lab VM 9200 value is only in
+# scripts/l1-w10/qemu-ad-l2.env.lab-9200.example).
+WIN_DISK_UUID=
 # Size heuristic window tracks the setup-created Windows disk (lab sample is ~80G / 70-90;
 # setup.sh default is 128G). Serial drive-scsi1 remains the primary identity.
 WIN_DISK_MIN_GB=$(( ${QAD_L2_DISK_GB:-80} * 80 / 100 ))
@@ -354,6 +362,7 @@ step_l2_install() {
   systemctl is-active --quiet "$L2_UNIT" && die "$L2_UNIT is running; refusing to install over it"
   systemctl reset-failed qemu-ad-l2-install 2>/dev/null || true
   local secs=$(( QAD_INSTALL_TIMEOUT_MIN * 60 ))
+  l2_forget_hostkey  # a new Windows install generates a new sshd host key
   echo RUNNING >"$W/install.state"
   systemd-run --unit=qemu-ad-l2-install --description="qemu-ad-pve: create Windows L2 (no GPU)" \
     --property=RuntimeMaxSec="$secs" --collect \
@@ -390,6 +399,7 @@ step_l2_wipe() {
   lsblk -lnpo NAME,TYPE "$d" | awk '$2=="part"{print $1}' | while read -r p; do wipefs -a "$p"; done
   wipefs -a "$d"
   rm -f "$W/install.state" "$W/VARS.install.fd"
+  l2_forget_hostkey
 }
 
 step_l2_enable() {
@@ -401,9 +411,37 @@ step_l2_enable() {
 }
 
 # ------------------------------------------------------------------ verify / status
+l2_strict() { # yes once the L2 host key is pinned, accept-new before the first connect
+  if [ -s "$L2_PIN" ] && [ -s "$L2_KNOWN" ]; then echo yes; else echo accept-new; fi
+}
+
+l2_forget_hostkey() {
+  rm -f "$L2_KNOWN" "$L2_PIN"
+}
+
+l2_pin_hostkey() { # record the key accept-new just stored; no-op when already pinned
+  [ "$(l2_strict)" = yes ] && return 0
+  [ -s "$L2_KNOWN" ] || return 1
+  if ! (umask 077 && ssh-keygen -lf "$L2_KNOWN" >"$L2_PIN.tmp" && mv -f "$L2_PIN.tmp" "$L2_PIN"); then
+    rm -f "$L2_PIN.tmp"
+    return 1
+  fi
+  echo "L2 host key pinned: $(cut -d' ' -f2 "$L2_PIN" | tr '\n' ' ')" >&2
+}
+
 l2_ssh() {
-  ssh -i "$W/l2_ed25519" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$W/l2_known_hosts" "$QAD_ADMIN_USER@$QAD_L2_IP" "$@"
+  local strict rc=0
+  strict=$(l2_strict)
+  if [ "$strict" = yes ] && [ "$(ssh-keygen -lf "$L2_KNOWN" 2>/dev/null)" != "$(cat "$L2_PIN")" ]; then
+    echo "L2 known_hosts ($L2_KNOWN) no longer matches the pinned key ($L2_PIN); refusing." >&2
+    echo "If Windows was reinstalled outside setup.sh: rm -f $L2_KNOWN $L2_PIN" >&2
+    return 255
+  fi
+  ssh -i "$W/l2_ed25519" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking="$strict" \
+    -o UserKnownHostsFile="$L2_KNOWN" "$QAD_ADMIN_USER@$QAD_L2_IP" "$@" || rc=$?
+  # rc 255 = ssh itself failed (refused, auth, host key); anything else means we were connected.
+  if [ "$strict" = accept-new ] && [ "$rc" -ne 255 ]; then l2_pin_hostkey || true; fi
+  return "$rc"
 }
 
 step_verify() {
@@ -419,7 +457,12 @@ step_verify() {
   echo "L2_SERVICE=$(systemctl is-active "$L2_UNIT" || true) enabled=$(systemctl is-enabled "$L2_UNIT" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     local out code
-    out=$(W10_CHECK_PS1="$W/w10-code43-check.ps1" "$W/w10-code43-run.sh" "$QAD_L2_IP" "$QAD_ADMIN_USER" \
+    # First connect pins the L2 host key; the GPU check then uses the same known_hosts + policy
+    # (before: root's default known_hosts with BatchMode, i.e. "Host key verification failed").
+    l2_ssh 'exit 0' >/dev/null 2>&1 || true
+    echo "L2_HOSTKEY=$([ "$(l2_strict)" = yes ] && echo pinned || echo not-pinned)"
+    out=$(W10_KNOWN_HOSTS="$L2_KNOWN" W10_STRICT_HOST_KEY="$(l2_strict)" \
+      W10_CHECK_PS1="$W/w10-code43-check.ps1" "$W/w10-code43-run.sh" "$QAD_L2_IP" "$QAD_ADMIN_USER" \
       --key "$W/l2_ed25519" --ssh-direct 2>"$W/verify-ssh.err") && code=0 || code=$?
     printf '%s\n' "$out" | tr -d '\n' | sed 's/^/GPU_JSON=/'; echo
     case $code in
@@ -455,6 +498,7 @@ step_status() {
   echo "INSTALL_STATE=$(cat "$W/install.state" 2>/dev/null || echo NONE)"
   echo "L2_SERVICE=$(systemctl is-active "$L2_UNIT" 2>/dev/null || true)"
   echo "L2_IP=$QAD_L2_IP"
+  echo "L2_HOSTKEY=$([ "$(l2_strict)" = yes ] && echo pinned || echo not-pinned)"
 }
 
 case "$step" in

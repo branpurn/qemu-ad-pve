@@ -403,3 +403,96 @@ def iter_bridges(root: str = "/") -> Iterable[str]:
     except OSError:
         return []
     return [n for n in names if os.path.isdir(os.path.join(d, n, "bridge"))]
+
+
+# Bridges PVE can attach a VM NIC to: Linux bridges (sysfs .../bridge) AND Open vSwitch bridges.
+# An OVS bridge is a netdev without a sysfs "bridge" dir, so iter_bridges() alone misses it
+# (live QA: vmbr1 is OVS and preflight reported "vmbr1 not found").
+OVS, LINUX = "ovs", "linux"
+_NOT_FOR_VMS = ("fwbr", "fwpr", "fwln", "tap", "veth", "ovs-system")
+
+
+def parse_ovs_list_br(text: str) -> List[str]:
+    """`ovs-vsctl list-br`: one bridge per line."""
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+def parse_ip_link_names(text: str) -> List[str]:
+    """`ip -o link show`: "2: eno1: <...>" / "5: vmbr0.10@vmbr0: <...>" -> names (no @parent)."""
+    out = []
+    for ln in text.splitlines():
+        m = re.match(r"^\d+:\s+([^:\s]+):", ln)
+        if m:
+            out.append(m.group(1).split("@", 1)[0])
+    return out
+
+
+def parse_interfaces_bridges(text: str) -> Dict[str, str]:
+    """/etc/network/interfaces (ifupdown2 syntax): bridges declared in iface stanzas.
+
+    ``ovs_type OVSBridge`` -> "ovs"; ``bridge-ports``/``bridge_ports`` -> "linux"."""
+    out: Dict[str, str] = {}
+    cur: Optional[str] = None
+    for raw in text.splitlines():
+        ln = raw.split("#", 1)[0].strip()
+        if not ln:
+            continue
+        w = ln.split()
+        if w[0] == "iface" and len(w) >= 2:
+            cur = w[1]
+            continue
+        if w[0] in ("auto", "source", "source-directory", "mapping") or w[0].startswith("allow-"):
+            cur = None  # a new top-level stanza ends the current iface block
+            continue
+        if cur is None:
+            continue
+        if w[0] == "ovs_type" and len(w) >= 2 and w[1] == "OVSBridge":
+            out[cur] = OVS
+        elif w[0] in ("bridge-ports", "bridge_ports") and out.get(cur) != OVS:
+            out[cur] = LINUX
+    return out
+
+
+def read_interfaces(root: str = "/") -> str:
+    """/etc/network/interfaces plus /etc/network/interfaces.d/* (PVE's default `source` line)."""
+    parts = []
+    base = os.path.join(root, "etc/network")
+    files = [os.path.join(base, "interfaces")]
+    try:
+        files += [os.path.join(base, "interfaces.d", n) for n in sorted(os.listdir(os.path.join(base, "interfaces.d")))]
+    except OSError:
+        pass
+    for f in files:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                parts.append(fh.read())
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
+def detect_bridges(root: str = "/", ovs_list_br: str = "", ip_link: str = "") -> Tuple[Dict[str, str], List[str]]:
+    """Return ({bridge: "linux"|"ovs"} that exist now, [bridges declared in interfaces but not present]).
+
+    Sources: sysfs bridge dirs (Linux), `ovs-vsctl list-br` (OVS), /etc/network/interfaces
+    (``ovs_type OVSBridge`` / ``bridge-ports``) cross-checked against `ip -o link show` and
+    /sys/class/net so a declared-but-down bridge is not reported as usable."""
+    kinds: Dict[str, str] = {b: LINUX for b in iter_bridges(root)}
+    for b in parse_ovs_list_br(ovs_list_br):
+        kinds[b] = OVS
+    present = set(parse_ip_link_names(ip_link))
+    try:
+        present |= set(os.listdir(os.path.join(root, "sys/class/net")))
+    except OSError:
+        pass
+    down = []
+    for b, kind in parse_interfaces_bridges(read_interfaces(root)).items():
+        if b in present:
+            if b not in kinds or kind == OVS:
+                kinds[b] = kind
+        elif b not in kinds:
+            down.append(b)
+    for b in list(kinds):
+        if b.startswith(_NOT_FOR_VMS):
+            del kinds[b]
+    return dict(sorted(kinds.items())), sorted(down)

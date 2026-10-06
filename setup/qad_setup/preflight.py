@@ -45,6 +45,8 @@ class Snapshot:
     meminfo: Dict[str, int] = field(default_factory=dict)
     nextid: Optional[str] = None
     bridges: List[str] = field(default_factory=list)
+    bridge_kinds: Dict[str, str] = field(default_factory=dict)  # bridge -> "linux" | "ovs"
+    bridges_down: List[str] = field(default_factory=list)  # declared in /etc/network/interfaces, not present
     tools: Dict[str, bool] = field(default_factory=dict)
     host_qemu_ad: str = ""  # version line of /opt/qemu-ad/bin/qemu-system-x86_64, "" if absent
     paths: Dict[str, Optional[int]] = field(default_factory=dict)  # input path -> size (None = missing)
@@ -82,7 +84,9 @@ def collect(cfg: Config, runner: Runner, root: str = "/") -> Snapshot:
         s.storages[content] = hi.parse_pvesm_status(runner.probe(["pvesm", "status", "--content", content]).stdout)
     s.meminfo = hi.parse_meminfo(_read(os.path.join(root, "proc/meminfo")))
     s.nextid = hi.parse_nextid(runner.probe(["pvesh", "get", "/cluster/nextid"]).stdout)
-    s.bridges = list(hi.iter_bridges(root))
+    s.bridge_kinds, s.bridges_down = hi.detect_bridges(
+        root, runner.probe(["ovs-vsctl", "list-br"]).stdout, runner.probe(["ip", "-o", "link", "show"]).stdout)
+    s.bridges = list(s.bridge_kinds)
     s.tools = {t: shutil.which(t) is not None for t in TOOLS}
     s.tools["wget|curl"] = bool(shutil.which("wget") or shutil.which("curl"))
     qad = "/opt/qemu-ad/bin/qemu-system-x86_64"
@@ -312,10 +316,20 @@ def evaluate(cfg: Config, s: Snapshot, vmid: Optional[str], gpu: Optional[hi.Gpu
         add(Check("GPU-guard hookscript", "WARN", "disabled: qemu-server will not know L1 holds the GPU",
                   "Another VM with this GPU as hostpci could start (and reset the GPU) while L1 runs."))
     # ---- bridge
-    if s.bridges and cfg["l1.bridge"] not in s.bridges:
-        add(Check("Bridge", "FAIL", f"{cfg['l1.bridge']} not found", "Choose one of: " + ", ".join(s.bridges)))
+    br = cfg["l1.bridge"]
+    kinds = s.bridge_kinds or {b: hi.LINUX for b in s.bridges}
+    if br in kinds:
+        add(Check("Bridge", "PASS", br + (" (Open vSwitch)" if kinds[br] == hi.OVS else " (Linux bridge)")))
+    elif br in s.bridges_down:
+        add(Check("Bridge", "WARN", f"{br} is declared in /etc/network/interfaces but not present (not up?)",
+                  "Bring it up (`ifreload -a`, or Apply Configuration in the node's Network panel) and re-run."))
+    elif kinds:
+        add(Check("Bridge", "FAIL", f"{br} not found (checked Linux bridges, `ovs-vsctl list-br`, "
+                  "/etc/network/interfaces + `ip link`)", "Choose one of: " + ", ".join(
+                      f"{b} (OVS)" if k == hi.OVS else b for b, k in kinds.items())))
     else:
-        add(Check("Bridge", "PASS", cfg["l1.bridge"]))
+        add(Check("Bridge", "WARN", f"{br}: no bridge detected on this host, cannot verify",
+                  "Check `ip link` / `ovs-vsctl list-br`; qm create fails later if the bridge does not exist."))
     # ---- RAM
     avail_mb = s.meminfo.get("MemAvailable", 0) // 1024
     need_mb = cfg.int("l1.memory_mb") + 1024

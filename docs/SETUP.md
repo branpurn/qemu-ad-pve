@@ -24,7 +24,7 @@ PVE host (stock, unchanged)
 # on the PVE node, as root
 git clone https://github.com/branpurn/qemu-ad-pve && cd qemu-ad-pve
 ./setup.sh preflight          # read-only: PASS/WARN/FAIL table with fixes
-./setup.sh --dry-run          # prints every host change and every L1 command, executes nothing
+./setup.sh --dry-run          # = install --dry-run (also -n): prints every host change and every L1 command, executes nothing
 ./setup.sh                    # = ./setup.sh install: asks a few questions (Enter = default), then builds it all
 ```
 
@@ -83,7 +83,7 @@ What you need before starting:
    | `l2_stage` | L1 | `stage.iso` (label QADSTAGE: `\qad\firstlogon.ps1`, `gpu-driver.ps1`, your files, `authorized_keys`) and `autounattend.iso` |
    | `l2_install` | L1 | Windows install/first boot **without the GPU** under qemu-ad-pve (systemd-run unit `qemu-ad-l2-install`, survives a disconnect); builds `VARS.fd` without the GPU. Progress is polled; the VNC hint (`ssh -L` to L1, display on 127.0.0.1 only) is printed |
    | `l2_enable` | L1 | delete `autounattend.iso` (holds the password), enable + start `w10-l2.service` (GPU) |
-   | `verify` | L1→L2 | patched KVM, L2 running, GPU `ConfigManagerErrorCode` 0 over SSH into Windows, optional PyTorch CUDA check |
+   | `verify` | L1→L2 | patched KVM, L2 running, GPU `ConfigManagerErrorCode` 0 over SSH into Windows, optional PyTorch CUDA check. The first SSH connect to L2 records its host key (`L1:/root/w10/l2_known_hosts` + fingerprint in `l2_hostkey.pinned`); every later L1→L2 SSH uses `StrictHostKeyChecking=yes`. A reinstall/wipe through `qad-l1.sh` forgets the key |
 
 5. **Summary**: colourised step table, the generated Windows admin password (printed once; also root-only in
    `L1:/etc/qemu-ad/l2-secrets`), the SSH command for L1 and the log path.
@@ -206,7 +206,9 @@ Assumptions:
 6. **L2 devices**: AHCI disk (`ide-hd` on `ide.1`) + `e1000e`, because qemu-ad-pve rewrites virtio vendor IDs;
    `-rtc base=localtime`; `X-PciMmio64Mb=65536`; `-cpu host`; OVMF VARS built in the no-GPU install run with a dummy
    `pcie-root-port,id=rpg,chassis=11,slot=1`, so the GPU run uses the same topology.
-7. **Windows disk selection in L1** uses `resolve-windows-disk.sh` (serial `drive-scsi1`, then UUID/label; refuses
+7. **Windows disk selection in L1** uses `resolve-windows-disk.sh` (serial `drive-scsi1`, then label/NTFS+size; an NTFS
+   UUID is scored only if `WIN_DISK_UUID` is set, which setup.sh never does: the lab 9200 value lives in
+   `scripts/l1-w10/qemu-ad-l2.env.lab-9200.example`; refuses
    mounted or ext4 disks, ambiguity fails closed). For the install only, `WIN_DISK_ALLOW_BLANK=1` also accepts a
    completely blank disk whose serial is exactly `drive-scsi1`.
 8. **Autounattend**: wipes disk 0 of the L2 (the only disk the L2 sees), creates a local admin (random password unless
@@ -264,7 +266,7 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | `l1.name` | `qad-l1` | Name of the L1 VM (asked interactively) |
 | `l1.storage` | `auto` | Storage for the L1 disks (needs content 'images') (asked interactively) |
 | `l1.iso_storage` | `auto` | Storage for the cloud-init seed ISO (needs content 'iso') |
-| `l1.bridge` | `vmbr0` | Host bridge for the L1 NIC (L1 needs internet for apt/DKMS) (asked interactively) |
+| `l1.bridge` | `vmbr0` | Host bridge for the L1 NIC (L1 needs internet for apt/DKMS) (asked interactively). Linux bridges and Open vSwitch bridges are both detected (sysfs, `ovs-vsctl list-br`, `ovs_type OVSBridge` in `/etc/network/interfaces` + `ip link`) |
 | `l1.memory_mb` | `12288` | L1 RAM in MiB (must hold the L2 RAM plus ~4 GiB) (asked interactively) |
 | `l1.cores` | `8` | L1 vCPUs (asked interactively) |
 | `l1.disk_gb` | `48` | L1 root disk size in GiB (DKMS sources, QEMU, staging ISOs) |

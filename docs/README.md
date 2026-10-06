@@ -3,6 +3,8 @@
 | Doc | Summary |
 | --- | --- |
 | [SETUP.md](SETUP.md) | **One-command setup** (`./setup.sh` on the PVE host): creates L1 + Windows L2 with the GPU; host changes, rollback, defaults (untested end to end) |
+| [HOST-CLEANUP.md](HOST-CLEANUP.md) | Host leftovers from the lab phases: purpose, what still depends on them (VM 9101/9102/9200), removal + rollback commands (documentation only, nothing executed) |
+| [qa-live-20261005.md](qa-live-20261005.md) | Live read-only QA of the PVE host (2026-10-05) |
 | [feasibility.md](feasibility.md) | Desk study: separate KVM alongside PVE — options, risks, recommended nested-L1 path |
 | [roadmap.md](roadmap.md) | Phases, host impact/rollback, acceptance criteria |
 | [viommu-nested-spike.md](viommu-nested-spike.md) | Nested vIOMMU spike (AMD-Vi) |

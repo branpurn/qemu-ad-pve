@@ -115,3 +115,26 @@ def test_installed_windows_disk_and_size_window(env):
                                                         "uuid": "ABCD"}]}
     p = resolve(env, {"/dev/sda": L1_ROOT, "/dev/sdb": win}, WIN_DISK_MAX_GB=200)
     assert p.returncode == 0 and p.stdout.strip() == "/dev/sdb", p.stderr
+
+
+LAB_UUID = "762491EA2491AE1D"
+
+
+def test_no_lab_uuid_default(env):
+    """The lab VM 9200 NTFS UUID is not a default any more: greenfield installs rely on the serial."""
+    other = {"serial": "drive-scsi9", "size": 128 * G, "pttype": "gpt",
+             "parts": [{"name": "sdb3", "fstype": "ntfs", "uuid": LAB_UUID}]}
+    disks = {"/dev/sda": L1_ROOT, "/dev/sdb": other}
+    p = resolve(env, disks)
+    assert p.returncode == 90 and "uuid=" not in p.stderr, p.stderr  # nothing scores without a serial
+    p = resolve(env, disks, WIN_DISK_UUID=LAB_UUID)  # explicit opt-in (lab example env) still works
+    assert p.returncode == 0 and p.stdout.strip() == "/dev/sdb" and f"uuid={LAB_UUID}" in p.stderr
+
+
+def test_lab_layout_still_resolves_by_serial_label_size(env):
+    lab = {"serial": "drive-scsi1", "size": 80 * G, "pttype": "gpt",
+           "parts": [{"name": "sdb1", "fstype": "vfat"}, {"name": "sdb3", "fstype": "ntfs", "label": "Windows",
+                                                        "uuid": LAB_UUID}]}
+    p = resolve(env, {"/dev/sda": L1_ROOT, "/dev/sdb": lab})
+    assert p.returncode == 0 and p.stdout.strip() == "/dev/sdb", p.stderr
+    assert "score=150" in p.stderr and "uuid=" not in p.stderr

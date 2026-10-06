@@ -32,7 +32,10 @@ def test_win11_bypass_and_no_key():
     xml = autounattend(c, "pw", "")
     parse(xml)
     assert "BypassTPMCheck" in xml and "BypassSecureBootCheck" in xml
-    assert "<ProductKey>" not in xml and "Windows 11 Pro N" in xml
+    assert "Windows 11 Pro N" in xml
+    # no key -> empty <Key/> (a missing <ProductKey> stops Setup: live E2E 2026-10-06)
+    pk = next(parse(xml).iter("{urn:schemas-microsoft-com:unattend}ProductKey"))
+    assert pk.find("u:Key", NS) is not None and not (pk.find("u:Key", NS).text or "")
 
 
 def test_random_password():

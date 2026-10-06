@@ -45,10 +45,12 @@ def autounattend(cfg: Config, admin_password: str, product_key: str = "") -> str
         cmds = [_cmd(i + 1, f"reg add HKLM\\SYSTEM\\Setup\\LabConfig /v {v} /t REG_DWORD /d 1 /f")
                 for i, v in enumerate(("BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck"))]
         bypass = "<RunSynchronous>" + "".join(cmds) + "</RunSynchronous>"
-    key = ""
-    if product_key:
-        key = (f"<ProductKey><Key>{escape(product_key.upper())}</Key>"
-               "<WillShowUI>OnError</WillShowUI></ProductKey>")
+    # No key: an EMPTY <Key/> is still required. Without any <ProductKey> element, Setup from the
+    # retail multi-edition Win10 22H2 ISO stops at "Windows cannot read the <ProductKey> setting from
+    # the unattend answer file" (live E2E 2026-10-06). The edition comes from /IMAGE/NAME below;
+    # Windows is then installed unactivated.
+    key = (f"<ProductKey><Key>{escape(product_key.upper())}</Key>"
+           "<WillShowUI>OnError</WillShowUI></ProductKey>")
     disk = ('<DiskConfiguration><Disk wcm:action="add"><DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk>'
             '<CreatePartitions>'
             '<CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>260</Size></CreatePartition>'

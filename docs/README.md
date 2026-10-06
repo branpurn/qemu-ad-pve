@@ -18,4 +18,4 @@
 | [gpu-phase-gen-launch-e2e.md](gpu-phase-gen-launch-e2e.md) | L1 booted from gen-launch E2E + offline PyTorch under qemu-ad-pve L2 |
 | [gpu-phase-qm-native-9200.md](gpu-phase-qm-native-9200.md) | VM 9200 driven by plain `qm start`/`qm shutdown` (args + guard hookscript) + L1 autostart unit for the Windows L2 |
 
-Source archive: [branpurn/separate-kvm-feasibility](https://github.com/branpurn/separate-kvm-feasibility).
+Source archive: [branpurn/separate-kvm-feasibility](https://github.com/branpurn/separate-kvm-feasibility) (private; the public copies are the files in this directory).

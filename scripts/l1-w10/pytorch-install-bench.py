@@ -21,7 +21,7 @@ def matmul(dtype, n, reps=20):
     torch.cuda.synchronize(); _ = a @ b; torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(reps):
-        c = a @ b
+        _ = a @ b
     torch.cuda.synchronize()
     dt = (time.perf_counter() - t0) / reps
     tflops = 2 * (n ** 3) / dt / 1e12

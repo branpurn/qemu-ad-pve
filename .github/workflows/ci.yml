@@ -7,8 +7,14 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on the same ref (push+PR storms were queueing ~15 min then cancelling).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   shellcheck-nested-kvm:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +26,10 @@ jobs:
           mapfile -t scripts < <(git ls-files 'dkms/**/*.sh' 'scripts/l1-w10/*.sh' 'scripts/qm-native-9200/*.sh' 'setup.sh' 'setup/**/*.sh')
           printf 'checking %s\n' "${scripts[@]}"
           shellcheck -x "${scripts[@]}"
+      - name: perl -c GPU-guard hookscript (stub PVE modules)
+        run: qa/scripts/perl-c-gpu-guard.sh
   pytest-tools:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +45,7 @@ jobs:
           bash -n /tmp/launch.sh
           shellcheck /tmp/launch.sh
   setup-tool:
+    timeout-minutes: 15
     # setup.sh (one-command PVE setup): pure-logic unit tests + a dry-run smoke test against
     # stub PVE commands and a fake sysfs. Python 3.9 = oldest supported, 3.13 = PVE 9 / Debian 13.
     runs-on: ubuntu-latest

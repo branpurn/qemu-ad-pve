@@ -12,7 +12,7 @@ This repository is also the home for the **separate-KVM feasibility work**: stoc
 | Layer | What runs | Role |
 | --- | --- | --- |
 | L0 host | Stock PVE + stock `kvm`/`kvm-amd` | Unchanged. GPU VFIO + Intel vIOMMU hand-off into L1. |
-| L1 (VM 9200) | Nested PVE/Linux with **DKMS patched `kvm`/`kvm-amd`** and **qemu-ad-pve** as its QEMU | Where the compatibility QEMU and patched hypervisor live; does not replace the host modules. |
+| L1 (VM 9200 / setup.sh) | Debian 13 nested Linux (lab notes also used a nested path) with **DKMS patched `kvm`/`kvm-amd`** and **qemu-ad-pve** as its QEMU | Where the compatibility QEMU and patched hypervisor live; does not replace the host modules. |
 | L2 | Windows 10 + RTX 4080 | AI/OpenCL/CuPy (and related) workloads under the nested path. |
 
 **One command (untested end to end):** on the PVE host, `./setup.sh` creates a new L1 VM and the Windows L2 with the GPU (preflight, `--dry-run`, resumable, `uninstall` removes exactly what it created). See [`docs/SETUP.md`](docs/SETUP.md).
@@ -27,7 +27,7 @@ Supporting material in this tree:
 - Real `qm showcmd` / launch samples: [`samples/`](samples/README.md)
 - CI for the nested-KVM tooling: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
-The archive history of the desk study and notes PRs remains in [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility); **new work belongs here**.
+The desk-study / notes archive is [`branpurn/separate-kvm-feasibility`](https://github.com/branpurn/separate-kvm-feasibility) (**private**); public copies of those docs live under [`docs/`](docs/). **New work belongs here**.
 
 ## What it is not
 

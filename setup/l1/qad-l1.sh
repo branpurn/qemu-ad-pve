@@ -198,6 +198,10 @@ MMIO64_MB=$QAD_MMIO64_MB
 KVM_PATCH_RE='$KVM_PATCH_RE'
 REQUIRE_QEMU_AD=1
 WIN_DISK_SERIAL=drive-scsi1
+# Size heuristic window tracks the setup-created Windows disk (lab sample is ~80G / 70-90;
+# setup.sh default is 128G). Serial drive-scsi1 remains the primary identity.
+WIN_DISK_MIN_GB=$(( ${QAD_L2_DISK_GB:-80} * 80 / 100 ))
+WIN_DISK_MAX_GB=$(( ${QAD_L2_DISK_GB:-80} * 120 / 100 ))
 L2_BRIDGE_IP=$QAD_L2_BRIDGE_IP
 L2_NET_PREFIX=$QAD_L2_NET_PREFIX
 L2_IP=$QAD_L2_IP

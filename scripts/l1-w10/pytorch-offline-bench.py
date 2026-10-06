@@ -5,7 +5,7 @@ Run with the python of a venv that was populated offline:
 Prints torch/CUDA info, nvidia-smi memory (FB + BAR1), fp32/fp16 matmul TFLOP/s and a
 200-step MLP training loop. Exit code 0 only on PASS.
 """
-import os, subprocess, sys, time
+import subprocess, sys, time
 
 print("python", sys.version)
 print("executable", sys.executable)
@@ -36,7 +36,7 @@ def matmul(dtype, n, reps=20):
     torch.cuda.synchronize(); _ = a @ b; torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(reps):
-        c = a @ b
+        _ = a @ b
     torch.cuda.synchronize()
     dt = (time.perf_counter() - t0) / reps
     tf = 2 * n ** 3 / dt / 1e12

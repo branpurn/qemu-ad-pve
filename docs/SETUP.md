@@ -186,6 +186,7 @@ Decisions (Brandon's defaults, now built in):
 * **Windows key**: your own product key or none.
 * **Isolated L2 network**: `brl2` in L1, no NAT/internet for the L2.
 * **Sizes**: L1 12 GiB / 8 vCPU / 48 GiB disk; L2 6 GiB / 4 vCPU / 128 GiB.
+  (Lab sample `samples/qm-native-9200/9200.conf.active-final` is smaller: L1 30G / L2 80G — that is a capture, not the setup.sh default.)
 * **L1 `onboot: 0`**: not started with the host.
 
 Assumptions:

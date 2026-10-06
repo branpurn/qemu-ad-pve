@@ -1,5 +1,5 @@
 """Upgraded CuPy AI path under patched-KVM default (PyTorch wheel not available offline)."""
-import cupy as cp, numpy as np, time, subprocess, sys
+import cupy as cp, numpy as np, time, subprocess
 p = cp.cuda.runtime.getDeviceProperties(0)
 free, total = cp.cuda.runtime.memGetInfo()
 print("device:", p['name'].decode(), "cc %d.%d" % (p['major'], p['minor']), "total MiB", total >> 20, "free MiB", free >> 20)

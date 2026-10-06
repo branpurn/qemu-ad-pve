@@ -3,7 +3,8 @@
 | Doc | Summary |
 | --- | --- |
 | [SETUP.md](SETUP.md) | **One-command setup** (`./setup.sh` on the PVE host): creates L1 + Windows L2 with the GPU; host changes, rollback, defaults (untested end to end) |
-| [HOST-CLEANUP.md](HOST-CLEANUP.md) | Host leftovers from the lab phases: purpose, what still depends on them (VM 9101/9102/9200), removal + rollback commands (documentation only, nothing executed) |
+| [HOST-CLEANUP.md](HOST-CLEANUP.md) | Host leftovers from the lab phases: purpose, what still depends on them (VM 9101/9102/9200), removal + rollback commands; items removed on 2026-10-06 are marked |
+| [host-cleanup-record-20261006.md](host-cleanup-record-20261006.md) | Record of the 2026-10-06 host cleanup: what was removed, exact commands, verified 9200 vzdump, before/after checks |
 | [qa-live-20261005.md](qa-live-20261005.md) | Live read-only QA of the PVE host (2026-10-05) |
 | [feasibility.md](feasibility.md) | Desk study: separate KVM alongside PVE — options, risks, recommended nested-L1 path |
 | [roadmap.md](roadmap.md) | Phases, host impact/rollback, acceptance criteria |

@@ -55,5 +55,5 @@ An unreachable L2 gives SKIP rows (and no FAIL) for the L2 part. Offline tests: 
 
 ## Live result
 
-Clean default install of `main` on the lab host (AMD 7950X + RTX 4080, Windows 10 22H2, driver 576.88): every row of `setup.sh audit` passes;
+Clean default install of `main` on the lab host (AMD 7950X + RTX 4080, Windows 10 22H2, driver 576.88): every row of `setup.sh audit` passes (docs/setup-e2e-live-20261009-phaseG.md);
 GPU Code 0, torch fp32 ~34.5 / fp16 ~101 TFLOP/s, and the result survives a full `qm shutdown` / `qm start` cycle.

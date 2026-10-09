@@ -299,7 +299,7 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | `l2.computer_name` | `QAD-L2` | Windows computer name |
 | `l2.timezone` | `UTC` | Windows time zone id (e.g. 'Eastern Standard Time') |
 | `l2.locale` | `en-US` | Windows UI/input locale |
-| `l2.cpu` | `host` | L2 -cpu value (plain host gave Code 0 in the lab) |
+| `l2.cpu` | `host,-hypervisor` | L2 -cpu value; `-hypervisor` clears CPUID leaf 1 ECX bit 31 so Windows reports HypervisorPresent=False (NVIDIA Code 0 + CUDA verified; plain `host` also gave Code 0) |
 | `l2.net_cidr` | `10.254.77.0/24` | Isolated L1<->L2 network (no NAT, no internet for L2) |
 | `l2.install_timeout_min` | `240` | Max minutes to wait for the Windows install/first boot |
 | `l2.vnc` | `127.0.0.1:0` | VNC display of the L2 *inside L1* during install (reach it with ssh -L) |

@@ -227,6 +227,23 @@ def s_hookscript(c: Ctx) -> str:
     return volid
 
 
+def s_l1_smbios(c: Ctx) -> str:
+    """Raw SMBIOS type 0/3 structures for the L1 (QEMU cannot clear the 'virtual machine' BIOS bit or set
+    the chassis type with -smbios fields); they are referenced from the L1 `args:` as -smbios file=..."""
+    if c.cfg["l1.smbios"] != "asus-am5":
+        raise _Skip("l1.smbios=none: the L1 keeps QEMU's/Proxmox's default DMI (systemd-detect-virt says qemu)")
+    d = os.path.join(c.state_dir, "smbios")
+    if c.runner.mkdir(d) and not c.dry:
+        c.manifest.add("dir", path=d)
+    for name, blob in plan.l1_smbios_files(c.vmid).items():
+        path = os.path.join(d, name)
+        digest = c.runner.write_file(path, blob, desc="L1 SMBIOS structure (raw, QEMU -smbios file=)")
+        if not c.dry:
+            c.manifest.add("file", path=path, sha256=digest)
+    c.state.facts["smbios_dir"] = d
+    return d
+
+
 def _vm_conf(c: Ctx) -> Optional[Dict[str, str]]:
     p = c.runner.probe(["qm", "config", c.vmid])
     if p.returncode != 0:
@@ -237,7 +254,8 @@ def _vm_conf(c: Ctx) -> Optional[Dict[str, str]]:
 def s_vm_create(c: Ctx) -> str:
     seed = c.state.facts.get("seed_volid") or f"{c.cfg['l1.iso_storage']}:iso/{plan.seed_volname(c.vmid)}"
     hook = c.state.facts.get("hook_volid") if c.cfg["l1.hookscript"] == "yes" else None
-    cmds = plan.qm_create(c.cfg, c.vmid, c.manifest.install_id, c.gpu, c.image_path(), seed, hook)
+    cmds = plan.qm_create(c.cfg, c.vmid, c.manifest.install_id, c.gpu, c.image_path(), seed, hook,
+                          c.state.facts.get("smbios_dir") or os.path.join(c.state_dir, "smbios"))
     conf = None if c.dry else _vm_conf(c)
     marker = vm_marker(c.manifest.install_id)
     if conf is not None and marker not in unquote(conf.get("description", "")):
@@ -618,6 +636,7 @@ STEPS: List[tuple] = [
     ("debian_image", "Debian 13 cloud image", s_debian_image),
     ("seed_iso", "cloud-init seed ISO", s_seed_iso),
     ("hookscript", "GPU-guard hookscript (qm-native-9200)", s_hookscript),
+    ("l1_smbios", "L1 SMBIOS structures (bare-metal look)", s_l1_smbios),
     ("vm_create", "create L1 VM", s_vm_create),
     ("vm_start", "start L1", s_vm_start),
     ("l1_ip", "L1 address + host key", s_l1_ip),

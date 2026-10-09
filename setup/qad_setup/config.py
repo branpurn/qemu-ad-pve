@@ -99,7 +99,7 @@ SCHEMA: List[Key] = [
     Key("l2", "computer_name", "QAD-L2", "Windows computer name"),
     Key("l2", "timezone", "UTC", "Windows time zone id (e.g. 'Eastern Standard Time')"),
     Key("l2", "locale", "en-US", "Windows UI/input locale"),
-    Key("l2", "cpu", "host", "L2 -cpu value (plain host gave Code 0 in the lab)"),
+    Key("l2", "cpu", "host,-hypervisor", "L2 -cpu value (host + CPUID hypervisor bit cleared; Code 0 + CUDA verified)"),
     Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
     Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
         minimum=10),

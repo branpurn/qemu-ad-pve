@@ -84,7 +84,7 @@ done
 
 /root/w10/l2net-up.sh
 
-CPU=${CPU:-host}
+CPU=${CPU:-host,-hypervisor}
 VGA=${VGA:-std}
 L2_SMP=${L2_SMP:-4}
 L2_MEM=${L2_MEM:-6144}

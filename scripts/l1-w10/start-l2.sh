@@ -94,6 +94,19 @@ VNC=()
 if [ -n "${L2_VNC:-}" ] && [ "${L2_VNC}" != "none" ]; then
   VNC=(-vnc "$L2_VNC")
 fi
+DISKOPTS=""
+[ -n "${DISK_MODEL:-}" ] && DISKOPTS="$DISKOPTS,model=$DISK_MODEL"
+[ -n "${DISK_SERIAL:-}" ] && DISKOPTS="$DISKOPTS,serial=$DISK_SERIAL"
+[ -n "${DISK_FW:-}" ] && DISKOPTS="$DISKOPTS,ver=$DISK_FW"
+# SMBIOS_FILE: one -smbios argument per line (values may contain spaces; no commas inside values).
+SMB=()
+if [ -n "${SMBIOS_FILE:-}" ] && [ -r "$SMBIOS_FILE" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && [[ $line != \#* ]] && SMB+=(-smbios "$line")
+  done <"$SMBIOS_FILE"
+fi
+VGAARGS=(-vga "$VGA")
+[ "$VGA" = none ] && VGAARGS=(-vga none)
 # Intentional split of EXTRA env into argv words
 # shellcheck disable=SC2206
 EXTRA=(${EXTRA:-})
@@ -103,12 +116,12 @@ exec "$QB" -name w10-l2-ad -machine q35,accel=kvm -cpu "$CPU" -smp "$L2_SMP" -m 
   -drive if=pflash,format=raw,readonly=on,file=/root/l2/OVMF_CODE.fd \
   -drive if=pflash,format=raw,file=/root/w10/VARS.fd \
   -drive file="$WD",format=raw,if=none,id=wdisk,cache=none,aio=native,discard=unmap \
-  -device ide-hd,drive=wdisk,bus=ide.1,rotation_rate=1 \
+  -device "ide-hd,drive=wdisk,bus=ide.1,rotation_rate=1$DISKOPTS" \
   -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device e1000e,netdev=n0,mac="$L2_MAC" \
   -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string="$MMIO64_MB" \
   -monitor unix:/root/w10/mon,server,nowait -qmp unix:/root/w10/qmp,server,nowait \
   -debugcon file:/root/w10/ovmf-debug.log -global isa-debugcon.iobase=0x402 \
-  -vga "$VGA" -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
+  "${VGAARGS[@]}" "${SMB[@]}" -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
   -device pcie-root-port,id=rpg,chassis=11,slot=1 \
   "${GPUDEV[@]}" \
   "${EXTRA[@]}" -pidfile /root/w10/w10.pid -daemonize

@@ -206,6 +206,8 @@ step_scripts() {
   if [ -f "$W/stage.iso" ]; then
     extra="-drive file=$W/stage.iso,format=raw,if=none,id=stg,media=cdrom,readonly=on -device ide-cd,drive=stg,bus=ide.2"
   fi
+  # one -smbios argument per line (start-l2.sh SMBIOS_FILE); empty profile = empty file
+  printf '%s\n' "${QAD_L2_SMBIOS:-}" | tr '|' '\n' >"$W/smbios.txt"
   cat >/etc/qemu-ad-l2.env <<CONF
 # Written by setup.sh (qad-l1.sh scripts). Read by /root/w10/start-l2.sh and l2net-up.sh.
 GPU_IDS="$QAD_GPU_IDS"
@@ -213,6 +215,11 @@ L2_SMP=$QAD_L2_SMP
 L2_MEM=$QAD_L2_MEM
 L2_MAC=$QAD_L2_MAC
 CPU=$QAD_L2_CPU
+VGA=${QAD_L2_VGA:-std}
+DISK_MODEL="${QAD_L2_DISK_MODEL:-}"
+DISK_SERIAL="${QAD_L2_DISK_SERIAL:-}"
+DISK_FW="${QAD_L2_DISK_FW:-}"
+SMBIOS_FILE=$W/smbios.txt
 MMIO64_MB=$QAD_MMIO64_MB
 KVM_PATCH_RE='$KVM_PATCH_RE'
 REQUIRE_QEMU_AD=1

@@ -118,6 +118,27 @@ The VM config uses the same shape as the lab's proven `samples/qm-native-9200/92
 * `bios: ovmf`, `efidisk0: …,efitype=4m,pre-enrolled-keys=0` (Secure Boot off, so the unsigned DKMS modules load),
   `cpu: host`, `balloon: 0`, `scsihw: virtio-scsi-single`, `agent: 1`, `serial0: socket`.
 
+## L2 hardware identity (software-compatibility lab setting)
+
+Some lab software checks whether Windows looks like ordinary hardware. The L2 is configured, by default, to
+report a plausible desktop (answers-file keys under `[l2]`, all optional):
+
+| Key | Default | What the L2 sees |
+|---|---|---|
+| `cpu` | `host,-hypervisor,kvm=off` | CPUID leaf 1 bit 31 clear, KVM leaf 0x40000000 empty |
+| `smbios` | `asus-am5` | SMBIOS types 0 (AMI BIOS), 1, 2 (ASUS board), 3, 4 (AM5 / Ryzen 9 7950X strings), 17 (Kingston DIMM) |
+| `mac_oui` | `a4:bf:01` | an Intel OUI instead of QEMU's `52:54:00` |
+| `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
+| `vga` | `std` | `none` removes the emulated VGA (QEMU PCI 1234:1111); set it after the install, when VNC is no longer needed |
+
+These end up in `/etc/qemu-ad-l2.env` (`CPU`, `L2_MAC`, `DISK_*`, `VGA`, `SMBIOS_FILE`) and are applied by
+`start-l2.sh`. Changing `mac_oui` on an installed L2 changes its MAC; `l2net-up.sh` drops a stale DHCP lease
+that still holds the L2 address under the old MAC. Live-tested with GPU Code 0 and torch fp32 ~34.6 /
+fp16 ~101 TFLOP/s. Not changeable from QEMU arguments: the ACPI WAET table (QEMU adds it unconditionally in
+`hw/i386/acpi-build.c`; needs a QEMU patch), the OVMF firmware vendor string in the registry
+`SystemBiosVersion`, and the PCI/chipset device IDs (Q35/ICH9 Intel IDs, already rewritten by the
+anti-detection patch).
+
 ## Use Shutdown, not Stop
 
 Once installed, L1 is driven exactly like 9200 in docs/gpu-phase-qm-native-9200.md:

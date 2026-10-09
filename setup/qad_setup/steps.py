@@ -24,7 +24,7 @@ from .windows import autounattend, random_password
 L1_REPO = "/root/qemu-ad-pve"
 L1_QAD = f"{L1_REPO}/setup/l1/qad-l1.sh"
 PAYLOAD = ["dkms/Makefile", "dkms/dkms.conf", "dkms/fetch-kvm-source.sh", "dkms/patches", "dkms/scripts",
-           "dkms/README.md", "scripts/l1-w10", "scripts/qm-native-9200", "setup/l1", "tests/w10-code43-check.ps1",
+           "dkms/README.md", "scripts/l1-w10", "scripts/qm-native-9200", "scripts/ovmf-identity", "patches/optional", "setup/l1", "tests/w10-code43-check.ps1",
            "tests/w10-code43-run.sh", "qemu-ad-pve.sh", "LICENSE"]
 
 
@@ -486,10 +486,10 @@ def s_l1_vfio(c: Ctx) -> str:
 
 
 def s_l1_optional_qemu(c: Ctx) -> str:
-    """OPT-IN: build the optional-patch QEMU into /opt/qemu-ad-optpatch inside L1 (never touches /opt/qemu-ad)."""
+    """DEFAULT ON (l2.optional_patches=none opts out): build the optional-patch QEMU into /opt/qemu-ad-optpatch inside L1 (never touches /opt/qemu-ad)."""
     pats = plan.optional_patches(c.cfg)
     if not pats:
-        raise _Skip("l2.optional_patches is empty: the L2 keeps using /opt/qemu-ad")
+        raise _Skip("l2.optional_patches=none: the L2 keeps using /opt/qemu-ad")
     if not c.dry:
         p = c.ssh_probe(f"{L1_QAD} qemu-optpatch-check")
         if p is not None and p.returncode == 0 and all(x in p.stdout for x in pats):
@@ -504,11 +504,24 @@ def s_l1_optional_qemu(c: Ctx) -> str:
 
 
 def s_l1_ovmf_identity(c: Ctx) -> str:
-    """OPT-IN: install a prebuilt OVMF_CODE (scripts/ovmf-identity) into L1 at a NEW path; never replaces
+    """DEFAULT ON (l2.ovmf_identity=no opts out): build OVMF in L1, or with l2.ovmf_identity_dir install a prebuilt OVMF_CODE (scripts/ovmf-identity) into L1 at a NEW path; never replaces
     /root/l2/OVMF_CODE.fd or the persistent VARS.fd (the Windows boot entry lives there)."""
     d = c.cfg["l2.ovmf_identity_dir"]
     if not d:
-        raise _Skip("l2.ovmf_identity_dir is empty: the L2 keeps Debian's OVMF")
+        if c.cfg["l2.ovmf_identity"] != "yes":
+            raise _Skip("l2.ovmf_identity=no: the L2 keeps Debian's OVMF")
+        # default: build it inside L1 (apt build-deps + edk2 source; L1 is disposable, the PVE host stays stock)
+        if not c.dry:
+            p = c.ssh_probe(f"{L1_QAD} ovmf-check")
+            if p is not None and p.returncode == 0:
+                return p.stdout.strip().splitlines()[-1]
+        c.l1("ovmf-build", timeout=2 * 3600)
+        if c.dry:
+            return "dry"
+        p = c.ssh_probe(f"{L1_QAD} ovmf-check")
+        if p is None or p.returncode != 0:
+            raise StepError(f"rebuilt OVMF in L1 not usable: {_check_detail(p.stdout if p else '')}")
+        return p.stdout.strip().splitlines()[-1]
     src = os.path.join(d, "OVMF_CODE_4M.fd")
     if c.dry:
         print(f"  {ui.c('DRY', 'magenta')} {src} -> L1:/opt/ovmf-identity/OVMF_CODE.fd (sha256-checked, new path)")
@@ -693,8 +706,8 @@ STEPS: List[tuple] = [
     ("l1_dkms", "patched KVM (DKMS)", s_l1_dkms),
     ("l1_qemu_ad", "qemu-ad-pve binary in L1", s_l1_qemu_ad),
     ("l1_vfio", "vfio-pci for the GPU in L1", s_l1_vfio),
-    ("l1_optional_qemu", "optional-patch QEMU in L1 (opt-in)", s_l1_optional_qemu),
-    ("l1_ovmf_identity", "rebuilt OVMF in L1 (opt-in)", s_l1_ovmf_identity),
+    ("l1_optional_qemu", "optional-patch QEMU built in L1 (default on)", s_l1_optional_qemu),
+    ("l1_ovmf_identity", "rebuilt OVMF identity built in L1 (default on)", s_l1_ovmf_identity),
     ("l1_scripts", "L2 scripts + w10-l2.service", s_l1_scripts),
     ("l1_reboot", "reboot L1, prove defaults", s_l1_reboot),
     ("l2_stage", "staging ISO (+ autounattend)", s_l2_stage),

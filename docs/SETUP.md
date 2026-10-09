@@ -139,6 +139,25 @@ fp16 ~101 TFLOP/s. Not changeable from QEMU arguments: the ACPI WAET table (QEMU
 `SystemBiosVersion`, and the PCI/chipset device IDs (Q35/ICH9 Intel IDs, already rewritten by the
 anti-detection patch).
 
+## L1 looks like bare metal too (`l1.smbios`, `l1.hide_hypervisor`)
+
+Some lab software also checks the machine it runs on (the L1 here). New L1 VMs are created with the same ASUS
+AM5 identity as the L2 (own serials) and without the hypervisor CPUID bit:
+
+* `cpu: host,hidden=1` and `-cpu host,-hypervisor,kvm=off` in `args:`;
+* `smbios1:` (type 1: ASUS / System Product Name), and `-smbios` entries in `args:` for types 2 (ROG STRIX
+  X670E-E GAMING WIFI), 4 (Ryzen 9 7950X, AM5) and 17 (Kingston DIMM);
+* types 0 and 3 as raw `-smbios file=/var/lib/qemu-ad/setup/smbios/qad-l1-<vmid>-smbios-type{0,3}.bin`
+  (written by the `l1_smbios` step, recorded in the manifest, removed by `uninstall`). QEMU cannot do this with
+  `-smbios` fields: it always sets the BIOS-extension "virtual machine" bit (byte 2 bit 4), which
+  `systemd-detect-virt` reports as `vm-other` ("DMI BIOS Extension table indicates virtualization") even when
+  the CPUID bit is hidden, and it writes chassis type 1 (Other) instead of 3 (Desktop).
+
+Live result (phase C, L1 = VM 9300): `systemd-detect-virt` = `none`, `/dev/kvm` and `kvm_amd` fine, `w10-l2.service`
+autostarts, GPU Code 0, `verify` PASS, torch fp32 34.7 / fp16 101.0 TFLOP/s. Only affects L1s created by this
+version; an existing L1 keeps its config (`qm set` the same lines by hand to match, then `qm shutdown` / `qm start`).
+`l1.smbios = none` / `l1.hide_hypervisor = no` restore the previous VM shape.
+
 ## Use Shutdown, not Stop
 
 Once installed, L1 is driven exactly like 9200 in docs/gpu-phase-qm-native-9200.md:
@@ -301,6 +320,8 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | `l1.qemu_ad` | `auto` | qemu-ad-pve binary for L2: copy (host /opt/qemu-ad, read-only), build (qemu-ad-pve.sh build inside L1) or auto (copy if present on host, else build) |
 | `l1.hookscript` | `auto` | Install the GPU-guard hookscript from scripts/qm-native-9200 (refuses start unless the GPU is on vfio-pci; reserves it via qemu-server so hostpci VMs are refused while L1 runs). auto = yes. no = unprotected (not recommended) |
 | `l1.snippets_storage` | `auto` | Existing storage with content 'snippets' for the hookscript (setup.sh never changes storage.cfg) |
+| `l1.smbios` | `asus-am5` | SMBIOS identity of the L1 (bare-metal look, `systemd-detect-virt` = none): asus-am5 \| none (QEMU/Proxmox defaults) |
+| `l1.hide_hypervisor` | `yes` | Hide the hypervisor from the L1 (no CPUID hypervisor bit, kvm=off); nested KVM and the GPU keep working |
 | `l1.onboot` | `no` | Start L1 when the host boots (GPU is then taken from other VMs) |
 | `l1.shutdown_timeout` | `240` | startup down= : seconds `qm shutdown`/host shutdown wait for L1 (L2 ACPI wait 150 s < w10-l2.service TimeoutStopSec 180 s < this); minimum 200 |
 | `gpu.slot` | `auto` | Host PCI slot of the GPU, e.g. 0000:01:00 (all functions are passed) (asked interactively) |

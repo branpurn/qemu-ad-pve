@@ -69,6 +69,11 @@ SCHEMA: List[Key] = [
         "no = unprotected (not recommended)", "choice", ("auto", "yes", "no")),
     Key("l1", "snippets_storage", "auto", "Existing storage with content 'snippets' for the hookscript "
         "(setup.sh never changes storage.cfg)"),
+    Key("l1", "smbios", "asus-am5",
+        "SMBIOS identity of the L1 (bare-metal look, `systemd-detect-virt` = none): asus-am5 | none (QEMU/Proxmox defaults)",
+        "choice", ("asus-am5", "none")),
+    Key("l1", "hide_hypervisor", "yes",
+        "Hide the hypervisor from the L1 (no CPUID hypervisor bit, kvm=off); nested KVM and the GPU keep working", "bool"),
     Key("l1", "onboot", "no", "Start L1 when the host boots (GPU is then taken from other VMs)", "bool"),
     Key("l1", "shutdown_timeout", "240", "startup down= : seconds `qm shutdown`/host shutdown wait for L1 "
         "(L2 ACPI wait 150 s < w10-l2.service TimeoutStopSec 180 s < this)", "int", minimum=200),

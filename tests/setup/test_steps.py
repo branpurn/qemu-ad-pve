@@ -276,3 +276,25 @@ def test_check_detail_drops_banner():
     out = "=== qad-l1.sh qemu-ad-check 2026-10-06T12:47:41+00:00\nQEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7\n"
     assert steps._check_detail(out) == "QEMU_AD=libs-missing libgcrypt.so.20 libiscsi.so.7"
     assert steps._check_detail("") == "(no output)"
+
+
+def test_l1_smbios_step_writes_binary_files_and_records_them(tmp_path, monkeypatch):
+    from qad_setup import manifest as mf
+    from qad_setup.runner import Runner
+    monkeypatch.setattr(mf, "SAFE_PREFIXES", (str(tmp_path) + "/",))
+    c = ctx(tmp_path, {})
+    c.runner = Runner()
+    d = steps.s_l1_smbios(c)
+    assert d == str(tmp_path / "smbios") and c.state.facts["smbios_dir"] == d
+    t0 = (tmp_path / "smbios" / "qad-l1-9201-smbios-type0.bin").read_bytes()
+    assert t0[0] == 0 and t0[0x13] & 0x10 == 0 and b"American Megatrends Inc." in t0
+    assert (tmp_path / "smbios" / "qad-l1-9201-smbios-type3.bin").read_bytes()[5] == 3
+    kinds = [(e["kind"], os.path.basename(e["path"])) for e in c.manifest.entries]
+    assert ("dir", "smbios") in kinds and ("file", "qad-l1-9201-smbios-type0.bin") in kinds
+
+
+def test_l1_smbios_step_skipped_when_none(tmp_path):
+    c = ctx(tmp_path, {})
+    c.cfg.set("l1.smbios", "none")
+    with pytest.raises(steps._Skip):
+        steps.s_l1_smbios(c)

@@ -160,3 +160,52 @@ def test_l1_env_carries_l2_identity(tmp_path):
     assert vals["QAD_L2_MAC"].startswith("a4:bf:01:")
     assert vals["QAD_L2_DISK_MODEL"] == "Samsung SSD 980 PRO 1TB" and vals["QAD_L2_DISK_SERIAL"]
     assert vals["QAD_L2_SMBIOS"].count("|") == 5 and vals["QAD_L2_VGA"] == "std"
+
+
+def test_l1_smbios_structures_are_valid_and_not_a_vm():
+    t0 = plan.smbios_type0_bin()
+    assert t0[0] == 0 and t0[1] == 0x18
+    assert t0[0x13] & 0x10 == 0  # BIOS characteristics extension byte 2 bit 4 = "virtual machine": clear
+    strings = t0[0x18:].split(b"\0")
+    assert strings[:3] == [b"American Megatrends Inc.", b"1654", b"01/12/2024"] and t0.endswith(b"\0\0")
+    t3 = plan.smbios_type3_bin()
+    assert t3[0] == 3 and t3[1] == 0x15 and t3[5] == 3  # chassis type 3 = Desktop
+    assert t3[0x15:].count(b"\0") == 5 and t3.endswith(b"\0\0")
+    assert set(plan.l1_smbios_files("9300")) == {"qad-l1-9300-smbios-type0.bin", "qad-l1-9300-smbios-type3.bin"}
+
+
+def test_l1_smbios_args_and_smbios1():
+    a = plan.l1_smbios_args("9300", "/var/lib/qemu-ad/setup/smbios")
+    assert a[0] == "file=/var/lib/qemu-ad/setup/smbios/qad-l1-9300-smbios-type0.bin"
+    assert a[2] == "file=/var/lib/qemu-ad/setup/smbios/qad-l1-9300-smbios-type3.bin"
+    assert a[1].startswith("type=2,manufacturer=ASUSTeK COMPUTER INC.,product=ROG STRIX X670E-E GAMING WIFI")
+    assert a[3].startswith("type=4,") and "AMD Ryzen 9 7950X" in a[3] and a[4].startswith("type=17,")
+    assert not any(x.startswith("type=1,") for x in a)  # type 1 is qm --smbios1
+    l2 = plan.l2_smbios("asus-am5", "9300")
+    assert l2 != "|".join(a) and a == plan.l1_smbios_args("9300", "/var/lib/qemu-ad/setup/smbios")
+    s1 = plan.l1_smbios1("9300", "abc")
+    assert s1.endswith(",base64=1") and s1 == plan.l1_smbios1("9300", "abc") and s1 != plan.l1_smbios1("9301", "abc")
+    assert "manufacturer=QVNVUw==" in s1
+
+
+def test_qm_create_l1_identity_defaults(tmp_path):
+    g = gpu(tmp_path)
+    c = Config({"l1.storage": "st", "l2.source": "none"})
+    cmds = plan.qm_create(c, "9300", "x", g, "/i", "s", None, "/var/lib/qemu-ad/setup/smbios")
+    o = dict(zip(cmds[0][3::2], cmds[0][4::2]))
+    assert o["--cpu"] == "host,hidden=1" and o["--smbios1"].startswith("uuid=")
+    parts = shlex.split(o["--args"])
+    assert "-cpu" in parts and parts[parts.index("-cpu") + 1] == "host,-hypervisor,kvm=off"
+    assert parts.count("-smbios") == 5 and any(p.startswith("file=") for p in parts)
+    assert "type=4,sock_pfx=AM5,manufacturer=Advanced Micro Devices,, Inc.,version=AMD Ryzen 9 7950X 16-Core Processor," \
+        "max-speed=5700,current-speed=4500,serial=Unknown,asset=Unknown,part=Unknown" in parts
+
+
+def test_qm_create_l1_identity_off_and_no_dir_keeps_old_shape(tmp_path):
+    g = gpu(tmp_path)
+    c = Config({"l1.storage": "st", "l2.source": "none", "l1.smbios": "none", "l1.hide_hypervisor": "no"})
+    o = dict(zip(*[iter(plan.qm_create(c, "9300", "x", g, "/i", "s", None, "/d")[0][3:])] * 2))
+    assert o["--cpu"] == "host" and "--smbios1" not in o and o["--args"] == plan.l1_args(g, 65536)
+    c = Config({"l1.storage": "st", "l2.source": "none"})  # defaults but no smbios dir (old callers): no -smbios
+    o = dict(zip(*[iter(plan.qm_create(c, "9300", "x", g, "/i", "s", None)[0][3:])] * 2))
+    assert "-smbios" not in o["--args"]

@@ -4,9 +4,12 @@ Nothing here touches the host; cli/steps execute (or, with --dry-run, print) the
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import shlex
+import struct
+import uuid
 from typing import Dict, List, Optional
 
 from .config import Config, l2_addresses
@@ -17,7 +20,10 @@ GPU_BRIDGE_ID = "gpubr"  # same id as tools/gen-launch.py and the lab launch scr
 ROOT_PORT = "ich9-pcie-port-1"  # defined by qemu-server's pve-q35-4.0.cfg on every q35 VM
 
 
-def l1_args(gpu: Gpu, mmio64_mb: int) -> str:
+L1_CPU_HIDDEN_ARG = "-cpu host,-hypervisor,kvm=off"
+
+
+def l1_args(gpu: Gpu, mmio64_mb: int, hide_hypervisor: bool = False, smbios: Optional[List[str]] = None) -> str:
     """The args: line, in the exact shape PR #24 proved with plain `qm start 9200`
     (docs/gpu-phase-qm-native-9200.md, samples/qm-native-9200/9200.conf.active-final):
     pcie-pci-bridge on ich9-pcie-port-1, every GPU function behind it, then the OVMF MMIO fw_cfg.
@@ -33,6 +39,11 @@ def l1_args(gpu: Gpu, mmio64_mb: int) -> str:
             dev += ",multifunction=on"
         parts.append(dev)
     parts.append(f"-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string={mmio64_mb}")
+    if hide_hypervisor:
+        # a later -cpu replaces the qm one: no CPUID hypervisor bit, no KVM signature (phase B/C, docs/SETUP.md)
+        parts.append(L1_CPU_HIDDEN_ARG)
+    for a in smbios or []:
+        parts.append("-smbios " + shlex.quote(a))
     return " ".join(parts)
 
 
@@ -52,7 +63,7 @@ def hook_volname(vmid: str) -> str:
 
 
 def qm_create(cfg: Config, vmid: str, install_id: str, gpu: Gpu, image_path: str, seed_volid: str,
-              hook_volid: Optional[str]) -> List[List[str]]:
+              hook_volid: Optional[str], smbios_dir: Optional[str] = None) -> List[List[str]]:
     st = cfg["l1.storage"]
     cmd = [
         "qm", "create", vmid,
@@ -63,7 +74,7 @@ def qm_create(cfg: Config, vmid: str, install_id: str, gpu: Gpu, image_path: str
         "--bios", "ovmf",
         "--efidisk0", f"{st}:1,efitype=4m,pre-enrolled-keys=0",
         "--ostype", "l26",
-        "--cpu", "host",
+        "--cpu", "host,hidden=1" if cfg.bool("l1.hide_hypervisor") else "host",
         "--sockets", "1",
         "--cores", cfg["l1.cores"],
         "--memory", cfg["l1.memory_mb"],
@@ -78,8 +89,11 @@ def qm_create(cfg: Config, vmid: str, install_id: str, gpu: Gpu, image_path: str
         "--vga", "std",
         "--onboot", "1" if cfg.bool("l1.onboot") else "0",
         "--startup", f"down={cfg['l1.shutdown_timeout']}",
-        "--args", l1_args(gpu, cfg.int("gpu.mmio64_mb")),
+        "--args", l1_args(gpu, cfg.int("gpu.mmio64_mb"), cfg.bool("l1.hide_hypervisor"),
+                          l1_smbios_args(vmid, smbios_dir) if smbios_dir and cfg["l1.smbios"] == "asus-am5" else None),
     ]
+    if cfg["l1.smbios"] == "asus-am5":
+        cmd += ["--smbios1", l1_smbios1(vmid, install_id)]
     if hook_volid:
         cmd += ["--hookscript", hook_volid]
     cmds = [cmd, ["qm", "disk", "resize", vmid, "scsi0", f"{cfg['l1.disk_gb']}G"]]
@@ -131,6 +145,65 @@ def l2_smbios(profile: str, vmid: str) -> str:
 
 
 # ------------------------------------------------------------------ cloud-init seed
+# ---- L1 SMBIOS (bare-metal look for the L1 itself, `systemd-detect-virt` = none) -------------------
+# Same ASUS AM5 identity as the L2 (SMBIOS_ASUS_AM5) with its own serials. Two things cannot be done with
+# `-smbios type=N,...` fields and are passed as raw `-smbios file=` structures:
+#   type 0: QEMU always sets BIOS-characteristics-extension byte 2 bit 4 ("system is a virtual machine"),
+#           which systemd-detect-virt reads from /sys/firmware/dmi ("DMI BIOS Extension table indicates
+#           virtualization" -> vm-other even with the CPUID hypervisor bit hidden);
+#   type 3: the chassis type field is not settable (QEMU writes 1 = Other; a desktop is 3).
+L1_SMBIOS_FILES = {"type0": "qad-l1-{vmid}-smbios-type0.bin", "type3": "qad-l1-{vmid}-smbios-type3.bin"}
+
+
+def smbios_type0_bin(vendor: str = "American Megatrends Inc.", version: str = "1654",
+                     date: str = "01/12/2024", major: int = 5, minor: int = 27) -> bytes:
+    """SMBIOS type 0 (BIOS information), spec 2.4 layout (0x18 bytes), VM bit clear."""
+    head = struct.pack("<BBHBBHBB", 0, 0x18, 0x0000, 1, 2, 0xE000, 3, 0xFF)
+    # characteristics: PCI, flash upgradeable, shadowing, boot from CD, selectable boot;
+    # extension: ACPI + USB legacy, byte 2 = BIOS boot spec + UEFI (bit 4, "virtual machine", is 0)
+    head += bytes([0x80, 0x98, 0x01, 0, 0, 0, 0, 0]) + bytes([0x03, 0x09]) + bytes([major, minor, 0xFF, 0xFF])
+    assert len(head) == 0x18
+    return head + b"".join(x.encode() + b"\0" for x in (vendor, version, date)) + b"\0"
+
+
+def smbios_type3_bin(text: str = "Default string") -> bytes:
+    """SMBIOS type 3 (chassis), spec 2.3 layout (0x15 bytes), chassis type 3 (Desktop)."""
+    head = struct.pack("<BBHBBBBBBBBBIBBBB", 3, 0x15, 0x0300, 1, 3, 2, 3, 4, 3, 3, 3, 2, 0, 0, 1, 0, 0)
+    assert len(head) == 0x15
+    return head + b"".join(text.encode() + b"\0" for _ in range(4)) + b"\0"
+
+
+def l1_smbios_files(vmid: str) -> Dict[str, bytes]:
+    return {L1_SMBIOS_FILES["type0"].format(vmid=vmid): smbios_type0_bin(),
+            L1_SMBIOS_FILES["type3"].format(vmid=vmid): smbios_type3_bin()}
+
+
+def l1_smbios_args(vmid: str, directory: str) -> List[str]:
+    """-smbios arguments (without the flag) for the L1: types 0/3 from files, 2/4/17 as fields."""
+    h = hashlib.sha256(f"qad-l1-smbios-{vmid}".encode()).hexdigest()
+    out = []
+    for e in SMBIOS_ASUS_AM5:
+        if e.startswith("type=0,"):
+            out.append("file=" + directory.rstrip("/") + "/" + L1_SMBIOS_FILES["type0"].format(vmid=vmid))
+        elif e.startswith("type=3,"):
+            out.append("file=" + directory.rstrip("/") + "/" + L1_SMBIOS_FILES["type3"].format(vmid=vmid))
+        elif e.startswith("type=1,"):
+            continue  # the L1 type 1 comes from `qm --smbios1`
+        else:
+            out.append(e.format(board_serial="24" + str(int(h[:12], 16))[:13].ljust(13, "0"),
+                                dimm_serial=h[12:20].upper()))
+    return out
+
+
+def l1_smbios1(vmid: str, install_id: str) -> str:
+    """`qm --smbios1` value (type 1, base64 fields) with a stable per-install UUID."""
+    b = lambda t: base64.b64encode(t.encode()).decode()  # noqa: E731
+    u = uuid.uuid5(uuid.NAMESPACE_URL, f"qad-l1-{install_id}-{vmid}")
+    return (f"uuid={u},manufacturer={b('ASUS')},product={b('System Product Name')},"
+            f"version={b('System Version')},serial={b('System Serial Number')},"
+            f"family={b('To be filled by O.E.M.')},base64=1")
+
+
 def user_data(pubkey: str, hostname: str) -> str:
     return f"""#cloud-config
 # qemu-ad-pve setup: minimal L1 bootstrap. Everything else is done over SSH by setup.sh

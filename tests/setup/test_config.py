@@ -98,3 +98,10 @@ def test_l2_identity_defaults_valid():
     assert cross_validate(Config({"l2.windows_iso": "local:iso/w.iso"})) == []
     assert cross_validate(Config({"l2.windows_iso": "local:iso/w.iso", "l2.mac_oui": "", "l2.disk_model": "",
                                   "l2.smbios": "none", "l2.vga": "none"})) == []
+
+
+def test_l1_identity_keys_defaults_and_validation():
+    c = Config({})
+    assert c["l1.smbios"] == "asus-am5" and c.bool("l1.hide_hypervisor")
+    with pytest.raises(ConfigError):
+        Config({"l1.smbios": "qemu"})

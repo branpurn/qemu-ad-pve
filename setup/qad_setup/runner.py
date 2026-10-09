@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import IO, Dict, List, Optional, Sequence
+from typing import IO, Dict, List, Optional, Sequence, Union
 
 from . import ui
 
@@ -123,21 +123,22 @@ class Runner:
         return p
 
     # ------------------------------------------------------------------ files
-    def write_file(self, path: str, content: str, mode: int = 0o644, desc: str = "") -> str:
+    def write_file(self, path: str, content: Union[str, bytes], mode: int = 0o644, desc: str = "") -> str:
         """Write (atomically) and return sha256. Dry-run prints the path and a preview."""
-        digest = hashlib.sha256(content.encode()).hexdigest()
+        raw = content if isinstance(content, bytes) else content.encode()
+        digest = hashlib.sha256(raw).hexdigest()
         if self.dry_run:
             print(f"  {ui.c('DRY', 'magenta')} write {path} (mode {oct(mode)}, {len(content)} bytes)"
                   + (f"   # {desc}" if desc else ""))
-            if self.verbose:
+            if self.verbose and isinstance(content, str):
                 for line in self.redact(content).splitlines()[:40]:
                     print(ui.c(f"        {line}", "dim"))
             self.changes.append(f"write {path}")
             return digest
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.tmp.{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        with open(tmp, "wb") as fh:
+            fh.write(raw)
         os.chmod(tmp, mode)
         os.replace(tmp, path)
         self._log(f"wrote {path} sha256={digest}")

@@ -211,7 +211,7 @@ def test_qm_create_l1_identity_off_and_no_dir_keeps_old_shape(tmp_path):
     assert "-smbios" not in o["--args"]
 
 
-def test_l1_env_optional_identity_defaults_off_and_carries_values(tmp_path):
+def test_l1_env_optional_identity_defaults_on_and_opt_out(tmp_path):
     g = gpu(tmp_path)
 
     def vals(extra):
@@ -224,8 +224,11 @@ def test_l1_env_optional_identity_defaults_off_and_carries_values(tmp_path):
                 out[k] = shlex.split(v)[0] if shlex.split(v) else ""
         return out
     d = vals({})
-    assert [d[k] for k in ("QAD_L2_OPTIONAL_PATCHES", "QAD_L2_OEM_ID", "QAD_L2_OEM_TABLE_ID",
-                           "QAD_L2_OEM_REVISION")] == [""] * 4 and d["QAD_L2_OVMF_IDENTITY"] == "0"
+    assert d["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"
+    assert [d[k] for k in ("QAD_L2_OEM_ID", "QAD_L2_OEM_TABLE_ID", "QAD_L2_OEM_REVISION")] == ["ALASKA", "A M I", "0x1072009"]
+    assert d["QAD_L2_OVMF_IDENTITY"] == "1" and d["QAD_L2_OVMF_BUILD"] == "1"
+    n = vals({"l2.optional_patches": "none", "l2.ovmf_identity": "no"})
+    assert n["QAD_L2_OPTIONAL_PATCHES"] == "" and n["QAD_L2_OVMF_IDENTITY"] == "0" and n["QAD_L2_OVMF_BUILD"] == "0"
     o = vals({"l2.optional_patches": "0001-acpi-omit-waet 0002-acpi-oem-id-table-id-revision,0001-acpi-omit-waet",
               "l2.oem_table_id": "A M I", "l2.ovmf_identity_dir": "/root/ovmf"})
     assert o["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"

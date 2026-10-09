@@ -256,6 +256,8 @@ def hostname_for(cfg: Config) -> str:
 def optional_patches(cfg: Config) -> List[str]:
     """Names from l2.optional_patches (comma/space separated), in order, without duplicates."""
     out: List[str] = []
+    if cfg["l2.optional_patches"].strip().lower() == "none":
+        return out
     for x in re.split(r"[,\s]+", cfg["l2.optional_patches"]):
         if x and x not in out:
             out.append(x)
@@ -293,7 +295,8 @@ def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
         "QAD_L2_OEM_ID": cfg["l2.oem_id"],
         "QAD_L2_OEM_TABLE_ID": cfg["l2.oem_table_id"],
         "QAD_L2_OEM_REVISION": cfg["l2.oem_revision"],
-        "QAD_L2_OVMF_IDENTITY": "1" if cfg["l2.ovmf_identity_dir"] else "0",
+        "QAD_L2_OVMF_IDENTITY": "1" if (cfg["l2.ovmf_identity"] == "yes" or cfg["l2.ovmf_identity_dir"]) else "0",
+        "QAD_L2_OVMF_BUILD": "1" if (cfg["l2.ovmf_identity"] == "yes" and not cfg["l2.ovmf_identity_dir"]) else "0",
         "QAD_L2_NET_PREFIX": str(prefix),
         "QAD_L2_BRIDGE_IP": bridge_ip,
         "QAD_L2_IP": l2_ip,

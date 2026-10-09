@@ -36,7 +36,7 @@ fi
 . "$ENVF"
 mkdir -p "$LOGDIR"
 case "$step" in
-  l2-install-status|status|verify|check-kvm|qemu-ad-check|qemu-optpatch-check) ;;
+  l2-install-status|status|verify|check-kvm|qemu-ad-check|qemu-optpatch-check|ovmf-check) ;;
   *) exec > >(tee -a "$LOGDIR/$step.log") 2>&1 ;;
 esac
 echo "=== qad-l1.sh $step $(date -Is)"
@@ -171,6 +171,34 @@ step_qemu_optpatch_check() {
   echo "QEMU_OPTPATCH=$("$qb" --version | head -1) patches=$(sed 's/.*# optional-patches=//p;d' /opt/qemu-ad-optpatch/.qemu-ad-configure-flags 2>/dev/null)"
 }
 
+step_ovmf_build() {
+  # DEFAULT (l2.ovmf_identity=yes): rebuild Debian's edk2 OVMF with another firmware identity inside L1
+  # (scripts/ovmf-identity, docs/ovmf-identity.md). Result: /opt/ovmf-identity/OVMF_CODE.fd, a NEW path;
+  # /root/l2/OVMF_CODE.fd and the persistent VARS.fd are never touched.
+  local out=/opt/ovmf-identity-build f
+  [ "${QAD_L2_OVMF_BUILD:-0}" = 1 ] || die "ovmf-build: QAD_L2_OVMF_BUILD is not 1"
+  export DEBIAN_FRONTEND=noninteractive
+  # `apt-get source` / `build-dep` need deb-src (Debian 13 cloud image: deb822 file)
+  f=/etc/apt/sources.list.d/debian.sources
+  if [ -f "$f" ] && ! grep -q '^Types:.*deb-src' "$f"; then sed -i 's/^Types: deb$/Types: deb deb-src/' "$f"; fi
+  [ -z "${QAD_L2_OEM_ID:-}" ] || export ACPI_OEM_ID="$QAD_L2_OEM_ID"
+  [ -z "${QAD_L2_OEM_TABLE_ID:-}" ] || export ACPI_OEM_TABLE_ID="$QAD_L2_OEM_TABLE_ID"
+  [ -z "${QAD_L2_OEM_REVISION:-}" ] || export ACPI_OEM_REVISION="$QAD_L2_OEM_REVISION"
+  WORKDIR=/root/ovmf-build OUT="$out" "$REPO/scripts/ovmf-identity/build-ovmf-identity.sh"
+  [ -s "$out/OVMF_CODE_4M.fd" ] || die "ovmf-build: no OVMF_CODE_4M.fd produced"
+  install -d -m 755 /opt/ovmf-identity
+  install -m 644 "$out/OVMF_CODE_4M.fd" /opt/ovmf-identity/OVMF_CODE.fd.tmp
+  mv -f /opt/ovmf-identity/OVMF_CODE.fd.tmp /opt/ovmf-identity/OVMF_CODE.fd
+  rm -rf /root/ovmf-build "$out"   # free the edk2 build tree (several GiB)
+  say "OVMF identity image in /opt/ovmf-identity/OVMF_CODE.fd"
+}
+
+step_ovmf_check() {
+  local f=/opt/ovmf-identity/OVMF_CODE.fd
+  [ -s "$f" ] || { echo "OVMF_IDENTITY=missing"; exit 1; }
+  echo "OVMF_IDENTITY=$f $(stat -c %s "$f") bytes sha256 $(sha256sum "$f" | cut -c1-12)"
+}
+
 step_qemu_ad_libs() { # <debian package>...: runtime libraries the copied host /opt/qemu-ad needs
   # setup.sh maps the sonames qemu-ad-check reports as missing to package names with `dpkg -S` on the
   # PVE host (same Debian 13 archive), then calls this. Only installs; never removes anything.
@@ -257,7 +285,8 @@ CONF
   # OPT-IN identity settings (all default off; without them the env file is exactly as before).
   # Revert: empty the l2.* keys, `setup.sh install --redo l1_scripts`, `systemctl restart w10-l2`
   # (or copy back the /etc/qemu-ad-l2.env backup), or just delete the lines below.
-  if [ -n "${QAD_L2_OPTIONAL_PATCHES:-}" ] && [ -x /opt/qemu-ad-optpatch/bin/qemu-system-x86_64 ]; then
+  if [ -n "${QAD_L2_OPTIONAL_PATCHES:-}" ]; then
+    [ -x /opt/qemu-ad-optpatch/bin/qemu-system-x86_64 ] || die "l2.optional_patches is set but /opt/qemu-ad-optpatch is not built (run the l1_optional_qemu step)"
     {
       echo "# optional QEMU patches (l2.optional_patches): $QAD_L2_OPTIONAL_PATCHES"
       echo "QB=/opt/qemu-ad-optpatch/bin/qemu-system-x86_64"
@@ -266,7 +295,8 @@ CONF
       [ -z "${QAD_L2_OEM_REVISION:-}" ] || printf 'OEM_REVISION=%q\n' "$QAD_L2_OEM_REVISION"
     } >>/etc/qemu-ad-l2.env
   fi
-  if [ "${QAD_L2_OVMF_IDENTITY:-0}" = 1 ] && [ -s /opt/ovmf-identity/OVMF_CODE.fd ]; then
+  if [ "${QAD_L2_OVMF_IDENTITY:-0}" = 1 ]; then
+    [ -s /opt/ovmf-identity/OVMF_CODE.fd ] || die "OVMF identity requested but /opt/ovmf-identity/OVMF_CODE.fd is missing (run the l1_ovmf_identity step)"
     printf '# rebuilt OVMF (l2.ovmf_identity_dir); the persistent VARS.fd is kept\nOVMF_CODE=/opt/ovmf-identity/OVMF_CODE.fd\n' >>/etc/qemu-ad-l2.env
   fi
   install_l2_unit
@@ -566,6 +596,8 @@ case "$step" in
   qemu-ad-libs) step_qemu_ad_libs "${@:2}" ;;
   qemu-optpatch-build) step_qemu_optpatch_build ;;
   qemu-optpatch-check) step_qemu_optpatch_check ;;
+  ovmf-build) step_ovmf_build ;;
+  ovmf-check) step_ovmf_check ;;
   vfio) step_vfio ;;
   scripts) step_scripts ;;
   check-kvm) step_check_kvm ;;

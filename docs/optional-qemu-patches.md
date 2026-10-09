@@ -30,8 +30,9 @@ PREFIX=/opt/qemu-ad-test SRC_ROOT=/root/scratch-patch/src ./qemu-ad-pve.sh build
 
 ## Use on the Windows L2
 
-`setup.sh` (opt-in, default off): set `l2.optional_patches` (and `l2.oem_id`, `l2.oem_table_id`, `l2.oem_revision`),
-run `setup.sh install` (step `l1_optional_qemu` builds `/opt/qemu-ad-optpatch` inside L1, `l1_scripts` writes
+`setup.sh` (**default ON**; `l2.optional_patches=none` opts out; defaults `l2.oem_id=ALASKA`, `l2.oem_table_id="A M I"`,
+`l2.oem_revision=0x1072009`): a plain `setup.sh install` builds QEMU inside L1 (adds roughly 15-20 min and several GiB of
+L1 disk; the PVE host stays stock) and (step `l1_optional_qemu` builds `/opt/qemu-ad-optpatch` inside L1, `l1_scripts` writes
 `QB=` and `OEM_*` into `/etc/qemu-ad-l2.env`). `start-l2.sh` turns `OEM_ID` / `OEM_TABLE_ID` / `OEM_REVISION` into
 `-machine q35,accel=kvm,x-oem-id=...,x-oem-table-id=...,x-oem-revision=...`.
 

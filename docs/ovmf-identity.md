@@ -1,7 +1,7 @@
 # Firmware identity: `SystemBiosVersion`, OVMF vendor string, ACPI OEM IDs
 
 Lab/dev software-compatibility aid (some software reads these values and expects ordinary PC hardware).
-The build is never run by `setup.sh` (opt-in install of the result: `l2.ovmf_identity_dir`); this is a build recipe plus an honest list of what can and cannot be changed.
+`setup.sh install` runs this build **by default inside L1** (step `l1_ovmf_identity`, about 5 min; opt out with `l2.ovmf_identity=no`; `l2.oem_*` set the ACPI OEM ids; `l2.ovmf_identity_dir` installs a prebuilt image instead). This is a build recipe plus an honest list of what can and cannot be changed.
 
 ## Where the Windows values come from
 
@@ -35,7 +35,7 @@ pre-enrolled variable stores) took about 5 minutes on 12 vCPUs. Inputs are valid
 
 ## Use on the L2
 
-`setup.sh` (opt-in, default off): build the image in a scratch VM, put `OVMF_CODE_4M.fd` in a directory on the PVE host
+`setup.sh` (default: built in L1 automatically; the rest of this paragraph is the `l2.ovmf_identity_dir` alternative): build the image in a scratch VM, put `OVMF_CODE_4M.fd` in a directory on the PVE host
 and set `l2.ovmf_identity_dir` to it. Step `l1_ovmf_identity` copies it (sha256-checked) to `L1:/opt/ovmf-identity/OVMF_CODE.fd`
 and `l1_scripts` adds `OVMF_CODE=/opt/ovmf-identity/OVMF_CODE.fd` to `/etc/qemu-ad-l2.env`. The shipped
 `/root/l2/OVMF_CODE.fd` and the persistent `/root/w10/VARS.fd` are not touched.

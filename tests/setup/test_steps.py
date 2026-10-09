@@ -300,11 +300,24 @@ def test_l1_smbios_step_skipped_when_none(tmp_path):
         steps.s_l1_smbios(c)
 
 
-def test_optional_identity_steps_skip_by_default(tmp_path):
+def test_optional_identity_steps_skip_when_opted_out(tmp_path):
     c = ctx(tmp_path, {})
+    c.cfg.set("l2.optional_patches", "none")
+    c.cfg.set("l2.ovmf_identity", "no")
     for fn in (steps.s_l1_optional_qemu, steps.s_l1_ovmf_identity):
         with pytest.raises(steps._Skip):
             fn(c)
+
+
+def test_identity_steps_run_by_default_in_l1_and_payload_has_sources(tmp_path):
+    names = [n for n, _, _ in steps.STEPS]
+    assert names.index("l1_optional_qemu") < names.index("l1_scripts") and \
+        names.index("l1_ovmf_identity") < names.index("l1_scripts") < names.index("l2_install")
+    assert "scripts/ovmf-identity" in steps.PAYLOAD and "patches/optional" in steps.PAYLOAD
+    c = ctx(tmp_path, {})
+    c.runner.dry_run = True
+    for fn in (steps.s_l1_optional_qemu, steps.s_l1_ovmf_identity):
+        assert fn(c) == "dry"
 
 
 def test_ovmf_identity_step_streams_file_with_sha_check(tmp_path, monkeypatch):

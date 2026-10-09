@@ -3,7 +3,7 @@
 # setup.sh on the PVE host over SSH. Every step is idempotent and logs to
 # /var/log/qemu-ad-setup/<step>.log. Settings: /etc/qemu-ad/setup.env (written by setup.sh).
 #
-# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | qemu-ad-libs PKG... | vfio | scripts | check-kvm |
+# Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | qemu-optpatch-build | qemu-optpatch-check | qemu-ad-libs PKG... | vfio | scripts | check-kvm |
 #         stage | l2-install | l2-install-status | l2-wipe | l2-enable | verify | status
 # Exit codes: 0 ok, 100 = reboot L1 and run the same step again, other = failure.
 set -euo pipefail
@@ -36,7 +36,7 @@ fi
 . "$ENVF"
 mkdir -p "$LOGDIR"
 case "$step" in
-  l2-install-status|status|verify|check-kvm|qemu-ad-check) ;;
+  l2-install-status|status|verify|check-kvm|qemu-ad-check|qemu-optpatch-check) ;;
   *) exec > >(tee -a "$LOGDIR/$step.log") 2>&1 ;;
 esac
 echo "=== qad-l1.sh $step $(date -Is)"
@@ -155,6 +155,22 @@ step_qemu_ad_build() {
   "$REPO/qemu-ad-pve.sh" build
 }
 
+step_qemu_optpatch_build() {
+  # OPT-IN (l2.optional_patches): a second QEMU in /opt/qemu-ad-optpatch with the optional patches
+  # (patches/optional/, docs/optional-qemu-patches.md). /opt/qemu-ad stays untouched; the L2 only uses
+  # the new binary when `scripts` writes QB= into /etc/qemu-ad-l2.env. Own source tree, so the
+  # patched sources never mix with the plain build.
+  [ -n "${QAD_L2_OPTIONAL_PATCHES:-}" ] || die "qemu-optpatch-build: QAD_L2_OPTIONAL_PATCHES is empty (l2.optional_patches)"
+  QAD_OPTIONAL_PATCHES="${QAD_L2_OPTIONAL_PATCHES// /,}" PREFIX=/opt/qemu-ad-optpatch \
+    SRC_ROOT=/opt/src-optpatch "$REPO/qemu-ad-pve.sh" build
+}
+
+step_qemu_optpatch_check() {
+  local qb=/opt/qemu-ad-optpatch/bin/qemu-system-x86_64
+  [ -x "$qb" ] || { echo "QEMU_OPTPATCH=missing"; exit 1; }
+  echo "QEMU_OPTPATCH=$("$qb" --version | head -1) patches=$(sed 's/.*# optional-patches=//p;d' /opt/qemu-ad-optpatch/.qemu-ad-configure-flags 2>/dev/null)"
+}
+
 step_qemu_ad_libs() { # <debian package>...: runtime libraries the copied host /opt/qemu-ad needs
   # setup.sh maps the sonames qemu-ad-check reports as missing to package names with `dpkg -S` on the
   # PVE host (same Debian 13 archive), then calls this. Only installs; never removes anything.
@@ -238,6 +254,21 @@ L2_DHCP_START=$QAD_L2_DHCP_START
 L2_DHCP_END=$QAD_L2_DHCP_END
 EXTRA="$extra"
 CONF
+  # OPT-IN identity settings (all default off; without them the env file is exactly as before).
+  # Revert: empty the l2.* keys, `setup.sh install --redo l1_scripts`, `systemctl restart w10-l2`
+  # (or copy back the /etc/qemu-ad-l2.env backup), or just delete the lines below.
+  if [ -n "${QAD_L2_OPTIONAL_PATCHES:-}" ] && [ -x /opt/qemu-ad-optpatch/bin/qemu-system-x86_64 ]; then
+    {
+      echo "# optional QEMU patches (l2.optional_patches): $QAD_L2_OPTIONAL_PATCHES"
+      echo "QB=/opt/qemu-ad-optpatch/bin/qemu-system-x86_64"
+      [ -z "${QAD_L2_OEM_ID:-}" ] || printf 'OEM_ID=%q\n' "$QAD_L2_OEM_ID"
+      [ -z "${QAD_L2_OEM_TABLE_ID:-}" ] || printf 'OEM_TABLE_ID=%q\n' "$QAD_L2_OEM_TABLE_ID"
+      [ -z "${QAD_L2_OEM_REVISION:-}" ] || printf 'OEM_REVISION=%q\n' "$QAD_L2_OEM_REVISION"
+    } >>/etc/qemu-ad-l2.env
+  fi
+  if [ "${QAD_L2_OVMF_IDENTITY:-0}" = 1 ] && [ -s /opt/ovmf-identity/OVMF_CODE.fd ]; then
+    printf '# rebuilt OVMF (l2.ovmf_identity_dir); the persistent VARS.fd is kept\nOVMF_CODE=/opt/ovmf-identity/OVMF_CODE.fd\n' >>/etc/qemu-ad-l2.env
+  fi
   install_l2_unit
   systemctl daemon-reload
   say "scripts in $W, settings /etc/qemu-ad-l2.env, unit $L2_UNIT (enabled later)"
@@ -533,6 +564,8 @@ case "$step" in
   qemu-ad-build) step_qemu_ad_build ;;
   qemu-ad-check) step_qemu_ad_check ;;
   qemu-ad-libs) step_qemu_ad_libs "${@:2}" ;;
+  qemu-optpatch-build) step_qemu_optpatch_build ;;
+  qemu-optpatch-check) step_qemu_optpatch_check ;;
   vfio) step_vfio ;;
   scripts) step_scripts ;;
   check-kvm) step_check_kvm ;;

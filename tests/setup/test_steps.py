@@ -298,3 +298,42 @@ def test_l1_smbios_step_skipped_when_none(tmp_path):
     c.cfg.set("l1.smbios", "none")
     with pytest.raises(steps._Skip):
         steps.s_l1_smbios(c)
+
+
+def test_optional_identity_steps_skip_by_default(tmp_path):
+    c = ctx(tmp_path, {})
+    for fn in (steps.s_l1_optional_qemu, steps.s_l1_ovmf_identity):
+        with pytest.raises(steps._Skip):
+            fn(c)
+
+
+def test_ovmf_identity_step_streams_file_with_sha_check(tmp_path, monkeypatch):
+    import hashlib
+    blob = b"\x5a" * (2 << 20)
+    d = tmp_path / "ovmf"
+    d.mkdir()
+    (d / "OVMF_CODE_4M.fd").write_bytes(blob)
+    c = ctx(tmp_path, {})
+    c.cfg.set("l2.ovmf_identity_dir", str(d))
+    seen = {}
+
+    def fake_run(argv, input=None, **kw):
+        seen["argv"], seen["input"] = argv, input
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(steps.Ctx, "ssh_argv", lambda self, remote, ip=None: ["ssh", "l1", remote])
+    detail = steps.s_l1_ovmf_identity(c)
+    assert seen["input"] == blob and hashlib.sha256(blob).hexdigest() in seen["argv"][-1]
+    assert "/opt/ovmf-identity/OVMF_CODE.fd" in detail
+    assert "/root/l2" not in seen["argv"][-1] and "VARS" not in seen["argv"][-1]  # existing firmware untouched
+
+
+def test_ovmf_identity_step_rejects_missing_or_tiny_file(tmp_path):
+    c = ctx(tmp_path, {})
+    c.cfg.set("l2.ovmf_identity_dir", str(tmp_path / "nope"))
+    with pytest.raises(steps.StepError):
+        steps.s_l1_ovmf_identity(c)
+    (tmp_path / "OVMF_CODE_4M.fd").write_bytes(b"x" * 10)
+    c.cfg.set("l2.ovmf_identity_dir", str(tmp_path))
+    with pytest.raises(steps.StepError):
+        steps.s_l1_ovmf_identity(c)

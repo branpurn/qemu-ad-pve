@@ -209,3 +209,24 @@ def test_qm_create_l1_identity_off_and_no_dir_keeps_old_shape(tmp_path):
     c = Config({"l1.storage": "st", "l2.source": "none"})  # defaults but no smbios dir (old callers): no -smbios
     o = dict(zip(*[iter(plan.qm_create(c, "9300", "x", g, "/i", "s", None)[0][3:])] * 2))
     assert "-smbios" not in o["--args"]
+
+
+def test_l1_env_optional_identity_defaults_off_and_carries_values(tmp_path):
+    g = gpu(tmp_path)
+
+    def vals(extra):
+        c = Config(dict({"l2.windows_iso": "local:iso/w.iso"}, **extra))
+        env = plan.l1_env(c, "abc", "9201", g, "amd", "CCCOMA X64", [])
+        out = {}
+        for line in env.splitlines():
+            if line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                out[k] = shlex.split(v)[0] if shlex.split(v) else ""
+        return out
+    d = vals({})
+    assert [d[k] for k in ("QAD_L2_OPTIONAL_PATCHES", "QAD_L2_OEM_ID", "QAD_L2_OEM_TABLE_ID",
+                           "QAD_L2_OEM_REVISION")] == [""] * 4 and d["QAD_L2_OVMF_IDENTITY"] == "0"
+    o = vals({"l2.optional_patches": "0001-acpi-omit-waet 0002-acpi-oem-id-table-id-revision,0001-acpi-omit-waet",
+              "l2.oem_table_id": "A M I", "l2.ovmf_identity_dir": "/root/ovmf"})
+    assert o["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"
+    assert o["QAD_L2_OEM_TABLE_ID"] == "A M I" and o["QAD_L2_OVMF_IDENTITY"] == "1"

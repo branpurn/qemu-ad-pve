@@ -105,3 +105,21 @@ def test_l1_identity_keys_defaults_and_validation():
     assert c["l1.smbios"] == "asus-am5" and c.bool("l1.hide_hypervisor")
     with pytest.raises(ConfigError):
         Config({"l1.smbios": "qemu"})
+
+
+def test_optional_identity_keys_default_off_and_validate():
+    base = {"l2.windows_iso": "local:iso/w.iso"}
+    c = Config(base)
+    assert [c["l2." + k] for k in ("optional_patches", "oem_id", "oem_table_id", "oem_revision",
+                                   "ovmf_identity_dir")] == [""] * 5
+    assert cross_validate(c) == []
+    ok = dict(base, **{"l2.optional_patches": "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision",
+                       "l2.oem_id": "ALASKA", "l2.oem_table_id": "A M I", "l2.oem_revision": "0x1072009"})
+    assert cross_validate(Config(ok)) == []
+    for k, v, frag in [("l2.optional_patches", "bad name;rm", "bad patch name"), ("l2.oem_id", "TOOLONGID", "oem_id"),
+                       ("l2.oem_table_id", "A,M", "oem_table_id"), ("l2.oem_revision", "1072009", "hex")]:
+        probs = cross_validate(Config(dict(ok, **{k: v})))
+        assert any(frag in p for p in probs), (k, probs)
+    # OEM values without patch 0002 would be silently ignored by QEMU: refuse
+    probs = cross_validate(Config(dict(base, **{"l2.oem_id": "ALASKA"})))
+    assert any("0002-acpi-oem-id-table-id-revision" in p for p in probs)

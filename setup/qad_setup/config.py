@@ -114,6 +114,17 @@ SCHEMA: List[Key] = [
     Key("l2", "disk_firmware", "5B2QGXA7", "L2 disk firmware revision"),
     Key("l2", "smbios", "asus-am5",
         "SMBIOS identity of the L2 (types 0/1/2/3/4/17): asus-am5 | none (patched-QEMU defaults)"),
+    Key("l2", "optional_patches", "",
+        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md), e.g. "
+        "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision. Built into /opt/qemu-ad-optpatch in L1 "
+        "(the L2 uses it via QB=; /opt/qemu-ad stays untouched). Empty = off"),
+    Key("l2", "oem_id", "", "ACPI OEM ID (<=6 chars, e.g. ALASKA); needs patch 0002. Empty = INTEL"),
+    Key("l2", "oem_table_id", "", "ACPI OEM table ID (<=8 chars, space padded, e.g. 'A M I'); needs patch 0002"),
+    Key("l2", "oem_revision", "", "ACPI OEM revision, hex (e.g. 0x1072009); needs patch 0002"),
+    Key("l2", "ovmf_identity_dir", "",
+        "PVE-host directory with an OVMF_CODE_4M.fd built by scripts/ovmf-identity/build-ovmf-identity.sh "
+        "(docs/ovmf-identity.md); copied to L1 /opt/ovmf-identity/OVMF_CODE.fd, the L2 uses it via OVMF_CODE=. "
+        "Empty = off (Debian's OVMF)", "path"),
     Key("l2", "vga", "std",
         "std = emulated VGA (QEMU PCI 1234:1111; needed to watch the install over VNC); "
         "none = no emulated VGA, the passed-through GPU is the only display (use after install)"),
@@ -378,6 +389,19 @@ def cross_validate(cfg: Config) -> List[str]:
             bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
     if cfg["l2.smbios"] not in ("asus-am5", "none"):
         bad.append("l2.smbios must be asus-am5 or none")
+    pats = [x for x in re.split(r"[,\s]+", cfg["l2.optional_patches"]) if x]
+    for x in pats:
+        if not re.fullmatch(r"[0-9]{4}-[a-z0-9-]+", x):
+            bad.append(f"l2.optional_patches: bad patch name {x!r} (like 0001-acpi-omit-waet)")
+    if not re.fullmatch(r"[A-Za-z0-9 ]{0,6}", cfg["l2.oem_id"]):
+        bad.append("l2.oem_id: up to 6 letters/digits/spaces")
+    if not re.fullmatch(r"[A-Za-z0-9 ]{0,8}", cfg["l2.oem_table_id"]):
+        bad.append("l2.oem_table_id: up to 8 letters/digits/spaces")
+    if not re.fullmatch(r"(0x[0-9A-Fa-f]{1,8})?", cfg["l2.oem_revision"]):
+        bad.append("l2.oem_revision must be hex like 0x1072009")
+    if (cfg["l2.oem_id"] or cfg["l2.oem_table_id"] or cfg["l2.oem_revision"]) and \
+            "0002-acpi-oem-id-table-id-revision" not in pats:
+        bad.append("l2.oem_* need l2.optional_patches to include 0002-acpi-oem-id-table-id-revision")
     if cfg["l2.vga"] not in ("std", "none"):
         bad.append("l2.vga must be std or none")
     try:

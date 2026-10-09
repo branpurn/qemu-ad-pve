@@ -2,6 +2,7 @@
 
 | Doc | Summary |
 | --- | --- |
+| [bare-metal-appearance.md](bare-metal-appearance.md) | What the L1/L2 report by default (CPUID, ACPI, SMBIOS, MAC, disk, registry), how `setup.sh audit` checks it, and what is **not** feasible (monitor EDID, stale registry Enum keys, CD-ROM name) |
 | [SETUP.md](SETUP.md) | **One-command setup** (`./setup.sh` on the PVE host): creates L1 + Windows L2 with the GPU; host changes, rollback, defaults (untested end to end) |
 | [HOST-CLEANUP.md](HOST-CLEANUP.md) | Host leftovers from the lab phases: purpose, what still depends on them (VM 9101/9102/9200), removal + rollback commands; items removed on 2026-10-06 are marked |
 | [host-cleanup-record-20261006.md](host-cleanup-record-20261006.md) | Record of the 2026-10-06 host cleanup: what was removed, exact commands, verified 9200 vzdump, before/after checks |

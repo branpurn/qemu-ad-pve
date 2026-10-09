@@ -4,7 +4,7 @@
 # /var/log/qemu-ad-setup/<step>.log. Settings: /etc/qemu-ad/setup.env (written by setup.sh).
 #
 # Steps:  packages | dkms | qemu-ad-build | qemu-ad-check | qemu-optpatch-build | qemu-optpatch-check | qemu-ad-libs PKG... | vfio | scripts | check-kvm |
-#         stage | l2-install | l2-install-status | l2-wipe | l2-enable | verify | status
+#         stage | l2-install | l2-install-status | l2-wipe | l2-enable | verify | audit | status
 # Exit codes: 0 ok, 100 = reboot L1 and run the same step again, other = failure.
 set -euo pipefail
 
@@ -36,7 +36,7 @@ fi
 . "$ENVF"
 mkdir -p "$LOGDIR"
 case "$step" in
-  l2-install-status|status|verify|check-kvm|qemu-ad-check|qemu-optpatch-check|ovmf-check) ;;
+  l2-install-status|status|verify|audit|check-kvm|qemu-ad-check|qemu-optpatch-check|ovmf-check) ;;
   *) exec > >(tee -a "$LOGDIR/$step.log") 2>&1 ;;
 esac
 echo "=== qad-l1.sh $step $(date -Is)"
@@ -587,6 +587,21 @@ step_verify() {
   return $rc
 }
 
+l2_scp() { # l2_scp LOCAL... REMOTE_DIR : same host-key policy as l2_ssh
+  local dest=${*: -1} strict
+  strict=$(l2_strict)
+  scp -i "$W/l2_ed25519" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking="$strict" \
+    -o UserKnownHostsFile="$L2_KNOWN" "${@:1:$#-1}" "$QAD_ADMIN_USER@$QAD_L2_IP:$dest"
+}
+
+# Opt-in, read-only: does the machine look like ordinary hardware (see docs/bare-metal-appearance.md)?
+step_audit() {
+  export W ENVF AUD="$REPO/scripts/bare-metal-audit"
+  [ -f "$AUD/evaluate.py" ] || die "scripts/bare-metal-audit missing in L1 ($AUD); re-run setup.sh install --redo l1_push"
+  # shellcheck disable=SC1091
+  source "$AUD/audit.sh"
+}
+
 step_status() {
   echo "L1_KERNEL=$(uname -r)"
   echo "KVM_VERSION=$(cat /sys/module/kvm/version 2>/dev/null || echo none)"
@@ -617,6 +632,7 @@ case "$step" in
   l2-enable) step_l2_enable ;;
   l2-wipe) step_l2_wipe ;;
   verify) step_verify ;;
+  audit) step_audit ;;
   status) step_status ;;
   *) echo "unknown step: $step" >&2; exit 64 ;;
 esac

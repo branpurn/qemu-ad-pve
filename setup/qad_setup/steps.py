@@ -24,7 +24,7 @@ from .windows import autounattend, random_password
 L1_REPO = "/root/qemu-ad-pve"
 L1_QAD = f"{L1_REPO}/setup/l1/qad-l1.sh"
 PAYLOAD = ["dkms/Makefile", "dkms/dkms.conf", "dkms/fetch-kvm-source.sh", "dkms/patches", "dkms/scripts",
-           "dkms/README.md", "scripts/l1-w10", "scripts/qm-native-9200", "scripts/ovmf-identity", "patches/optional", "setup/l1", "tests/w10-code43-check.ps1",
+           "dkms/README.md", "scripts/l1-w10", "scripts/qm-native-9200", "scripts/ovmf-identity", "scripts/bare-metal-audit", "patches/optional", "setup/l1", "tests/w10-code43-check.ps1",
            "tests/w10-code43-run.sh", "qemu-ad-pve.sh", "LICENSE"]
 
 
@@ -351,7 +351,7 @@ def s_l1_push(c: Ctx) -> str:
     env = plan.l1_env(c.cfg, c.manifest.install_id, c.vmid, c.gpu, c.cpu_vendor, c.iso_label, stage_kinds)
     files = [p for p in PAYLOAD if os.path.exists(os.path.join(c.repo, p))]
     tar = ["tar", "-C", c.repo, "--exclude=__pycache__", "--exclude=dkms/src", "--exclude=dkms/build", "-czf", "-"] + files
-    remote = f"mkdir -p {L1_REPO} && tar -xzf - -C {L1_REPO} && chmod +x {L1_REPO}/setup/l1/*.sh {L1_REPO}/qemu-ad-pve.sh {L1_REPO}/scripts/ovmf-identity/*.sh"
+    remote = f"mkdir -p {L1_REPO} && tar -xzf - -C {L1_REPO} && chmod +x {L1_REPO}/setup/l1/*.sh {L1_REPO}/qemu-ad-pve.sh {L1_REPO}/scripts/ovmf-identity/*.sh {L1_REPO}/scripts/bare-metal-audit/*.sh"
     if c.dry:
         print(f"  {ui.c('DRY', 'magenta')} {shlex.join(tar)} | {shlex.join(c.ssh_argv(remote))}")
     else:

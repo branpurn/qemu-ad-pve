@@ -77,8 +77,8 @@ What you need before starting:
    | `l1_packages` | L1 | kernel + headers, dkms, build tools, ovmf, dnsmasq-base, genisoimage, …; reboots L1 if a newer kernel was installed; `apt-mark hold` the kernel |
    | `l1_dkms` | L1 | patched KVM via `dkms/` (`l1.kvm_source=debian`: `arch/x86/kvm` + `virt/kvm` from the matching Debian `linux-source`, like the lab build; `upstream`: `dkms/fetch-kvm-source.sh`), modules-load, check that `modinfo kvm` resolves to `updates/dkms` |
    | `l1_qemu_ad` | L1 | `copy`: read-only `tar` of the host's `/opt/qemu-ad` into L1 (the lab method, docs/gpu-phase-patched-kvm-l1.md); `build`: `qemu-ad-pve.sh build` in L1 (new subcommand: deps, fetch, patch, build; no divert/wrapper) |
-   | `l1_optional_qemu` | L1 | **opt-in** (`l2.optional_patches`, default empty = skipped): second QEMU in `/opt/qemu-ad-optpatch` with the optional patches (docs/optional-qemu-patches.md); `/opt/qemu-ad` is not touched |
-   | `l1_ovmf_identity` | L1 | **opt-in** (`l2.ovmf_identity_dir`, default empty = skipped): copy a prebuilt `OVMF_CODE_4M.fd` (scripts/ovmf-identity, docs/ovmf-identity.md) to `/opt/ovmf-identity/OVMF_CODE.fd` (sha256-checked, new path; `/root/l2/OVMF_CODE.fd` and `VARS.fd` are kept) |
+   | `l1_optional_qemu` | L1 | **default ON** (`l2.optional_patches` = `0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision`; `none` skips it; ~4 min): second QEMU built in L1 in `/opt/qemu-ad-optpatch` with the optional patches (docs/optional-qemu-patches.md); `/opt/qemu-ad` is not touched |
+   | `l1_ovmf_identity` | L1 | **default ON** (`l2.ovmf_identity = yes`; `no` skips it; ~7 min): OVMF with another firmware identity built **in L1** (scripts/ovmf-identity, docs/ovmf-identity.md) to `/opt/ovmf-identity/OVMF_CODE.fd`; alternatively `l2.ovmf_identity_dir` copies a prebuilt `OVMF_CODE_4M.fd` (sha256-checked). New path; `/root/l2/OVMF_CODE.fd` and `VARS.fd` are kept |
    | `l1_vfio` | L1 | `vfio-pci ids=<GPU ids>` + softdeps, initramfs |
    | `l1_scripts` | L1 | `/root/w10` (start-l2.sh, resolve-windows-disk.sh, l2net-up/down.sh, qad-qmp.py, and `l2-service.sh` from `scripts/qm-native-9200`), `OVMF_CODE.fd`, `/etc/qemu-ad-l2.env`, `w10-l2.service` from `scripts/qm-native-9200` (installed, not enabled yet). Both are copied verbatim when the L1 GPU address is the lab's `02:01.0/.1`; otherwise only the GPU BDF list and the `ConditionPathExists` path are adapted |
    | `l1_reboot` | L1 | reboot and prove: kvm version matches the patched build, from `updates/dkms`, DMAR present, GPU on vfio-pci |
@@ -94,6 +94,7 @@ Other subcommands:
 
 * `./setup.sh status`: what the manifest lists, step states, `qm status`, and `qad-l1.sh status` from L1 (patched KVM, L2 state).
 * `./setup.sh verify`: re-runs the L1/L2 checks; PASS/FAIL table; exit code 0 only on PASS.
+* `./setup.sh audit` (also `verify --audit`): opt-in, read-only **bare-metal appearance audit**: L1 `systemd-detect-virt`/DMI, and in L2 the CPUID hypervisor bit, WAET/ACPI OEM ids, SMBIOS types 0-4/17 incl. chassis, MAC OUI, disk model/firmware, registry `SystemBiosVersion`, GPU Code. PASS/FAIL/INFO rows are compared with what this install's settings promise; exit 0 only on `AUDIT=PASS`. See [bare-metal-appearance.md](bare-metal-appearance.md).
 * `./setup.sh uninstall [--dry-run] [--force]`: see [Rollback](#rollback--uninstall).
 
 ## Exactly what changes on the host
@@ -371,3 +372,4 @@ All settings (`setup/config.example.ini` has the same list with comments):
 | `qemu-ad-pve.sh build` inside L1 | **untested** (the `install` path it reuses is the tested one) |
 | Windows unattended install, sendkey boot, OpenSSH/Python/NVIDIA offline installs, image source, Windows 11 | **untested** |
 | Intel hosts | **untested** (lab: AMD 7950X) |
+| Clean default install of `main` end to end on the lab host (2026-10-09, VM 9310 and 9320 on AMD 7950X + RTX 4080), `verify`, shutdown/start cycle, `audit` | **live-tested** (see docs/bare-metal-appearance.md) |

@@ -18,7 +18,7 @@ from .manifest import HostFacts, Manifest, ManifestError, plan_uninstall
 from .runner import CommandError, Runner, sha256_file
 from .state import State
 
-SUBCOMMANDS = ("preflight", "install", "status", "verify", "uninstall")
+SUBCOMMANDS = ("preflight", "install", "status", "verify", "audit", "uninstall")
 VALUE_OPTS = {"--config", "--state-dir", "--redo", "--set", "--sysroot"}
 DEFAULT_ROOT = "/var/lib/qemu-ad"
 
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="One-command setup of the qemu-ad-pve nested stack on a Proxmox VE host: creates an L1 "
                     "Debian 13 VM (patched KVM + qemu-ad-pve) and a Windows L2 that gets the passed-through GPU.",
         epilog="Default subcommand: install. Docs: docs/SETUP.md")
-    sub = p.add_subparsers(dest="cmd", metavar="{preflight,install,status,verify,uninstall}")
+    sub = p.add_subparsers(dest="cmd", metavar="{preflight,install,status,verify,audit,uninstall}")
     sub.add_parser("preflight", parents=[common], help="read-only host checks (PASS/WARN/FAIL table)")
     ins = sub.add_parser("install", parents=[common], help="create L1 + L2 and set everything up (resumable)")
     ins.add_argument("--redo", action="append", default=[], choices=steps.STEP_NAMES, metavar="STEP",
@@ -55,7 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--wipe-l2-disk", action="store_true",
                      help="(l2.source=iso) wipe the setup-created Windows disk (serial drive-scsi1) before reinstalling")
     sub.add_parser("status", parents=[common], help="show what was created and the state of L1/L2")
-    sub.add_parser("verify", parents=[common], help="patched KVM in L1, L2 running, GPU Code 0, optional CUDA")
+    vp = sub.add_parser("verify", parents=[common], help="patched KVM in L1, L2 running, GPU Code 0, optional CUDA")
+    vp.add_argument("--audit", action="store_true", help="also run the bare-metal appearance audit (see `setup.sh audit`)")
+    sub.add_parser("audit", parents=[common],
+                   help="opt-in, read-only: does the L1/L2 look like ordinary hardware? (docs/bare-metal-appearance.md)")
     un = sub.add_parser("uninstall", parents=[common], help="remove exactly what the manifest lists")
     un.add_argument("--force", action="store_true",
                     help="also remove setup files whose content changed (never VMs without our marker)")
@@ -441,7 +444,30 @@ def cmd_verify(app: App) -> int:
                 st = "PASS" if v.split(" ")[0] == "0" else "FAIL"
             rows.append([st, k, v])
     print(ui.table(["RESULT", "CHECK", "VALUE"], rows, colorize_col=0) if rows else out)
-    return 0 if p is not None and p.returncode == 0 else 1
+    rc = 0 if p is not None and p.returncode == 0 else 1
+    if getattr(app.args, "audit", False):
+        rc = max(rc, cmd_audit(app))
+    return rc
+
+
+def cmd_audit(app: App) -> int:
+    """Run `qad-l1.sh audit` in L1: PASS/FAIL rows for hypervisor bit, WAET, ACPI OEM, SMBIOS, MAC, disk, registry."""
+    if (rc := _need_install(app)) is not None:
+        return rc
+    ctx = _ctx_for(app)
+    app.open_log()
+    _track_log(app)
+    if "l1_ip" not in app.state.facts:
+        ui.error("L1 address unknown (install did not get that far)")
+        return 1
+    ui.heading(f"bare-metal audit via L1 {ctx.l1_ip()}")
+    if app.args.dry_run:
+        ctx.l1("audit", check=False)
+        return 0
+    p = ctx.ssh_probe(f"{steps.L1_QAD} audit", timeout=600)
+    out = p.stdout if p else ""
+    print(out.rstrip() or ui.c("  (no output; L1 not reachable over SSH?)", "yellow"))
+    return 0 if p is not None and p.returncode == 0 and "AUDIT=PASS" in out else 1
 
 
 def cmd_uninstall(app: App) -> int:
@@ -537,7 +563,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cmd == "preflight":
             _, _, _, checks = cmd_preflight(app, ask=False)  # read-only, no questions
             return 1 if pf.failed(checks) else 0
-        return {"install": cmd_install, "status": cmd_status, "verify": cmd_verify,
+        return {"install": cmd_install, "status": cmd_status, "verify": cmd_verify, "audit": cmd_audit,
                 "uninstall": cmd_uninstall}[args.cmd](app)
     except (ConfigError, ManifestError) as exc:
         ui.error(str(exc))

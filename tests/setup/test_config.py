@@ -102,6 +102,7 @@ def test_l2_identity_defaults_valid():
 
 def test_l1_identity_keys_defaults_and_validation():
     c = Config({})
+    assert c["l2.smbios_chassis"] == "desktop"
     assert c["l1.smbios"] == "asus-am5" and c.bool("l1.hide_hypervisor")
     with pytest.raises(ConfigError):
         Config({"l1.smbios": "qemu"})

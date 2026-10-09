@@ -135,7 +135,10 @@ step_dkms() {
     dkms build "$DKMS_NAME/$DKMS_VER" -k "$kver"
     dkms install "$DKMS_NAME/$DKMS_VER" -k "$kver"
   else
-    "$REPO/dkms/scripts/l1-dkms.sh" install
+    # qad-l1.sh already refused to run on a PVE host above. With the default L1 SMBIOS identity
+    # (l1.smbios=asus-am5) `systemd-detect-virt --vm` is "none" by design, so l1-dkms.sh's own
+    # "am I in a VM" guard must be bypassed here (found in the 2026-10-09 clean default run).
+    KVM_L1_FORCE=i-know-this-is-not-the-pve-host "$REPO/dkms/scripts/l1-dkms.sh" install
   fi
   # Boot default (docs/gpu-phase-patched-kvm-default.md): updates/dkms outranks the stock
   # module in depmod's search order, and modules-load.d loads it on every boot.

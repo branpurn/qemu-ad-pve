@@ -2,8 +2,8 @@
 
 Lab/dev software-compatibility aid: some software reads the ACPI tables and the registry values Windows derives
 from them. Two small, **optional** patches on top of the qemu-anti-detection patch (`qemu-10.2.2.patch`) are
-carried in `patches/optional/qemu-10.2.2/`. They are **off by default**: without `QAD_OPTIONAL_PATCHES` the build,
-the build stamp and the binary are exactly what they were before.
+carried in `patches/optional/qemu-10.2.2/`. They are **off by default in `qemu-ad-pve.sh`** (without `QAD_OPTIONAL_PATCHES` the build,
+the build stamp and the binary are exactly what they were before) but **on by default in `setup.sh`** (built inside L1, see below).
 
 | name | what it does |
 |---|---|

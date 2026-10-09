@@ -351,7 +351,7 @@ def s_l1_push(c: Ctx) -> str:
     env = plan.l1_env(c.cfg, c.manifest.install_id, c.vmid, c.gpu, c.cpu_vendor, c.iso_label, stage_kinds)
     files = [p for p in PAYLOAD if os.path.exists(os.path.join(c.repo, p))]
     tar = ["tar", "-C", c.repo, "--exclude=__pycache__", "--exclude=dkms/src", "--exclude=dkms/build", "-czf", "-"] + files
-    remote = f"mkdir -p {L1_REPO} && tar -xzf - -C {L1_REPO} && chmod +x {L1_REPO}/setup/l1/*.sh"
+    remote = f"mkdir -p {L1_REPO} && tar -xzf - -C {L1_REPO} && chmod +x {L1_REPO}/setup/l1/*.sh {L1_REPO}/qemu-ad-pve.sh {L1_REPO}/scripts/ovmf-identity/*.sh"
     if c.dry:
         print(f"  {ui.c('DRY', 'magenta')} {shlex.join(tar)} | {shlex.join(c.ssh_argv(remote))}")
     else:

@@ -179,9 +179,8 @@ step_ovmf_build() {
   [ "${QAD_L2_OVMF_BUILD:-0}" = 1 ] || die "ovmf-build: QAD_L2_OVMF_BUILD is not 1"
   export DEBIAN_FRONTEND=noninteractive
   # `apt-get source` / `build-dep` need deb-src (Debian 13 cloud image: deb822 file)
-  for f in /etc/apt/sources.list.d/debian.sources; do
-    [ -f "$f" ] && ! grep -q '^Types:.*deb-src' "$f" && sed -i 's/^Types: deb$/Types: deb deb-src/' "$f"
-  done
+  f=/etc/apt/sources.list.d/debian.sources
+  if [ -f "$f" ] && ! grep -q '^Types:.*deb-src' "$f"; then sed -i 's/^Types: deb$/Types: deb deb-src/' "$f"; fi
   [ -z "${QAD_L2_OEM_ID:-}" ] || export ACPI_OEM_ID="$QAD_L2_OEM_ID"
   [ -z "${QAD_L2_OEM_TABLE_ID:-}" ] || export ACPI_OEM_TABLE_ID="$QAD_L2_OEM_TABLE_ID"
   [ -z "${QAD_L2_OEM_REVISION:-}" ] || export ACPI_OEM_REVISION="$QAD_L2_OEM_REVISION"

@@ -107,14 +107,22 @@ if [ -n "${SMBIOS_FILE:-}" ] && [ -r "$SMBIOS_FILE" ]; then
 fi
 VGAARGS=(-vga "$VGA")
 [ "$VGA" = none ] && VGAARGS=(-vga none)
+# Optional (default off): ACPI OEM identity via the optional QEMU patches (QB must be a build with
+# patches/optional/0002) and firmware file overrides. Values may contain spaces (OEM_TABLE_ID='A M I   ').
+MACHINE="q35,accel=kvm"
+[ -n "${OEM_ID:-}" ] && MACHINE="$MACHINE,x-oem-id=$OEM_ID"
+[ -n "${OEM_TABLE_ID:-}" ] && MACHINE="$MACHINE,x-oem-table-id=$OEM_TABLE_ID"
+[ -n "${OEM_REVISION:-}" ] && MACHINE="$MACHINE,x-oem-revision=$OEM_REVISION"
+OVMF_CODE=${OVMF_CODE:-/root/l2/OVMF_CODE.fd}
+OVMF_VARS=${OVMF_VARS:-/root/w10/VARS.fd}
 # Intentional split of EXTRA env into argv words
 # shellcheck disable=SC2206
 EXTRA=(${EXTRA:-})
 
 # shellcheck disable=SC2086
-exec "$QB" -name w10-l2-ad -machine q35,accel=kvm -cpu "$CPU" -smp "$L2_SMP" -m "$L2_MEM" -rtc base=localtime \
-  -drive if=pflash,format=raw,readonly=on,file=/root/l2/OVMF_CODE.fd \
-  -drive if=pflash,format=raw,file=/root/w10/VARS.fd \
+exec "$QB" -name w10-l2-ad -machine "$MACHINE" -cpu "$CPU" -smp "$L2_SMP" -m "$L2_MEM" -rtc base=localtime \
+  -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+  -drive if=pflash,format=raw,file="$OVMF_VARS" \
   -drive file="$WD",format=raw,if=none,id=wdisk,cache=none,aio=native,discard=unmap \
   -device "ide-hd,drive=wdisk,bus=ide.1,rotation_rate=1$DISKOPTS" \
   -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device e1000e,netdev=n0,mac="$L2_MAC" \

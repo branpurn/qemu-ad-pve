@@ -1,7 +1,7 @@
 # Firmware identity: `SystemBiosVersion`, OVMF vendor string, ACPI OEM IDs
 
 Lab/dev software-compatibility aid (some software reads these values and expects ordinary PC hardware).
-Nothing here is applied by `setup.sh`; it is a build recipe plus an honest list of what can and cannot be changed.
+The build is never run by `setup.sh` (opt-in install of the result: `l2.ovmf_identity_dir`); this is a build recipe plus an honest list of what can and cannot be changed.
 
 ## Where the Windows values come from
 
@@ -33,15 +33,24 @@ It runs `apt-get build-dep edk2` + `apt-get source edk2` and `make -f debian/rul
 replaced, and copies `OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd` to `$OUT`. A full build (CODE, secboot, strictnx and the
 pre-enrolled variable stores) took about 5 minutes on 12 vCPUs. Inputs are validated (no shell metacharacters).
 
-## Try it on the L2 (steps only, not done by the repo)
+## Use on the L2
 
-`start-l2.sh` boots `-drive if=pflash,...,file=/root/l2/OVMF_CODE.fd` with the persistent `/root/w10/VARS.fd`.
+`setup.sh` (opt-in, default off): build the image in a scratch VM, put `OVMF_CODE_4M.fd` in a directory on the PVE host
+and set `l2.ovmf_identity_dir` to it. Step `l1_ovmf_identity` copies it (sha256-checked) to `L1:/opt/ovmf-identity/OVMF_CODE.fd`
+and `l1_scripts` adds `OVMF_CODE=/opt/ovmf-identity/OVMF_CODE.fd` to `/etc/qemu-ad-l2.env`. The shipped
+`/root/l2/OVMF_CODE.fd` and the persistent `/root/w10/VARS.fd` are not touched.
 
-1. `systemctl stop w10-l2.service` (clean ACPI shutdown).
-2. `cp /root/l2/OVMF_CODE.fd /root/l2/OVMF_CODE.fd.orig`; copy the new `OVMF_CODE_4M.fd` over `/root/l2/OVMF_CODE.fd`.
-   Keep the existing `VARS.fd` (same 4M layout; Windows' boot entry lives there).
-3. `systemctl start w10-l2.service`; check `SystemBiosVersion` and that the GPU is still Code 0 (`setup.sh verify`).
-4. Revert: copy `OVMF_CODE.fd.orig` back and restart.
+By hand (live-tested 2026-10-09; the old firmware file stays where it is, nothing is overwritten):
+
+1. Copy the build to L1 at a new path: `/opt/ovmf-identity/OVMF_CODE.fd`.
+2. Back up `/etc/qemu-ad-l2.env`, `/root/w10/VARS.fd`, `/root/l2/OVMF_CODE.fd`; append `OVMF_CODE=/opt/ovmf-identity/OVMF_CODE.fd`
+   to the env file (`start-l2.sh` reads `OVMF_CODE` and `OVMF_VARS`, defaults are the old paths).
+3. `systemctl restart w10-l2`; check `SystemBiosVersion` and `setup.sh verify`.
+4. Revert: remove that line (or restore the env backup) and restart.
+
+**Keep the existing `VARS.fd`.** The rebuilt `OVMF_CODE` has the same 4M layout; Windows booted straight from the
+existing NVRAM (boot entry intact, no re-add needed, full shutdown/start cycle fine). The new `OVMF_VARS_4M.fd` is an
+empty template with no Windows boot entry; do not switch to it on an installed L2.
 
 ## Tested (scratch VM, no GPU, nothing on the live stack)
 
@@ -54,8 +63,10 @@ on q35 with the rebuilt `OVMF_CODE_4M.fd`; tables from `/sys/firmware/acpi/table
 | BGRT (firmware's own table) OEM / table / rev | `INTEL` / `EDK2    ` / 0x2 | `ALASKA` / `A M I   ` / 0x1072009 |
 | FACP/APIC/DSDT/HPET/MCFG OEM / table / rev (QEMU) | `INTEL` / `PC8086  ` / 0x1 | `ALASKA` / `A M I   ` / 0x1072009 |
 
-Not tested: the Windows registry value itself (no Windows scratch guest) and the live L2 (would swap the firmware file);
-`FirmwareRevision` was set (`0x5001B`) but is only visible to Windows. Secure Boot variants (`*.secboot*.fd`) are built
+Live L2 (Windows 10, 2026-10-09): `SystemBiosVersion` third string went from `Debian distribution of EDK II - 10000` to
+`American Megatrends International, LLC. - 5001B` (revision shown in hex without `0x`); GPU Code 0, torch fp32 ~34.6-34.8 / fp16 ~101,
+verify PASS, full shutdown/start cycle fine. `HKLM\\...\\System\\BIOS` (`BIOSVendor`/`BIOSVersion`/`BIOSReleaseDate`) comes from SMBIOS and did not change.
+Note: the build script's `OVMF_VERSION_STRING`/`OVMF_RELEASE_DATE` are not what Windows shows there. Secure Boot variants (`*.secboot*.fd`) are built
 too, but the L2 uses the non-secboot image.
 
 `tests/ovmf-identity-test.sh` covers the flag generation and input validation offline.

@@ -2,6 +2,7 @@
 state file so `setup.sh install` resumes where it stopped."""
 from __future__ import annotations
 
+import hashlib
 import json
 from urllib.parse import unquote
 import os
@@ -484,6 +485,52 @@ def s_l1_vfio(c: Ctx) -> str:
     return "vfio-pci ids=" + ",".join(f.ids for f in c.gpu.functions)
 
 
+def s_l1_optional_qemu(c: Ctx) -> str:
+    """OPT-IN: build the optional-patch QEMU into /opt/qemu-ad-optpatch inside L1 (never touches /opt/qemu-ad)."""
+    pats = plan.optional_patches(c.cfg)
+    if not pats:
+        raise _Skip("l2.optional_patches is empty: the L2 keeps using /opt/qemu-ad")
+    if not c.dry:
+        p = c.ssh_probe(f"{L1_QAD} qemu-optpatch-check")
+        if p is not None and p.returncode == 0 and all(x in p.stdout for x in pats):
+            return p.stdout.strip().splitlines()[-1]
+    c.l1("qemu-optpatch-build", timeout=4 * 3600)
+    if c.dry:
+        return "dry"
+    p = c.ssh_probe(f"{L1_QAD} qemu-optpatch-check")
+    if p is None or p.returncode != 0:
+        raise StepError(f"optional-patch QEMU in L1 not usable: {_check_detail(p.stdout if p else '')}")
+    return p.stdout.strip().splitlines()[-1]
+
+
+def s_l1_ovmf_identity(c: Ctx) -> str:
+    """OPT-IN: install a prebuilt OVMF_CODE (scripts/ovmf-identity) into L1 at a NEW path; never replaces
+    /root/l2/OVMF_CODE.fd or the persistent VARS.fd (the Windows boot entry lives there)."""
+    d = c.cfg["l2.ovmf_identity_dir"]
+    if not d:
+        raise _Skip("l2.ovmf_identity_dir is empty: the L2 keeps Debian's OVMF")
+    src = os.path.join(d, "OVMF_CODE_4M.fd")
+    if c.dry:
+        print(f"  {ui.c('DRY', 'magenta')} {src} -> L1:/opt/ovmf-identity/OVMF_CODE.fd (sha256-checked, new path)")
+        return "dry"
+    if not os.path.isfile(src):
+        raise StepError(f"{src} not found (build it with scripts/ovmf-identity/build-ovmf-identity.sh in a scratch VM)")
+    with open(src, "rb") as fh:
+        blob = fh.read()
+    if not 1 << 20 <= len(blob) <= 8 << 20:
+        raise StepError(f"{src}: {len(blob)} bytes is not a plausible OVMF_CODE_4M.fd")
+    digest = hashlib.sha256(blob).hexdigest()
+    import subprocess
+    remote = ("install -d -m 755 /opt/ovmf-identity && cat > /opt/ovmf-identity/OVMF_CODE.fd.tmp && "
+              f"echo '{digest}  /opt/ovmf-identity/OVMF_CODE.fd.tmp' | sha256sum -c --quiet && "
+              "chmod 644 /opt/ovmf-identity/OVMF_CODE.fd.tmp && "
+              "mv -f /opt/ovmf-identity/OVMF_CODE.fd.tmp /opt/ovmf-identity/OVMF_CODE.fd")
+    r = subprocess.run(c.ssh_argv(remote), input=blob, capture_output=True)
+    if r.returncode:
+        raise StepError(f"copy of the OVMF image to L1 failed: {r.stderr.decode(errors='replace').strip()}")
+    return f"/opt/ovmf-identity/OVMF_CODE.fd sha256 {digest[:12]}"
+
+
 def s_l1_scripts(c: Ctx) -> str:
     c.l1("scripts", timeout=600)
     return "/root/w10 + w10-l2.service (qm-native-9200 unit, not enabled yet)"
@@ -646,6 +693,8 @@ STEPS: List[tuple] = [
     ("l1_dkms", "patched KVM (DKMS)", s_l1_dkms),
     ("l1_qemu_ad", "qemu-ad-pve binary in L1", s_l1_qemu_ad),
     ("l1_vfio", "vfio-pci for the GPU in L1", s_l1_vfio),
+    ("l1_optional_qemu", "optional-patch QEMU in L1 (opt-in)", s_l1_optional_qemu),
+    ("l1_ovmf_identity", "rebuilt OVMF in L1 (opt-in)", s_l1_ovmf_identity),
     ("l1_scripts", "L2 scripts + w10-l2.service", s_l1_scripts),
     ("l1_reboot", "reboot L1, prove defaults", s_l1_reboot),
     ("l2_stage", "staging ISO (+ autounattend)", s_l2_stage),

@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import re
 import shlex
 import struct
 import uuid
@@ -252,6 +253,15 @@ def hostname_for(cfg: Config) -> str:
 
 
 # ------------------------------------------------------------------ L1 env file
+def optional_patches(cfg: Config) -> List[str]:
+    """Names from l2.optional_patches (comma/space separated), in order, without duplicates."""
+    out: List[str] = []
+    for x in re.split(r"[,\s]+", cfg["l2.optional_patches"]):
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
 def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
            win_iso_label: str = "", stage_inputs: Optional[List[str]] = None) -> str:
     """/etc/qemu-ad/setup.env inside L1 (sourced by setup/l1/qad-l1.sh). No secrets here."""
@@ -279,6 +289,11 @@ def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
         "QAD_L2_DISK_FW": cfg["l2.disk_firmware"],
         "QAD_L2_SMBIOS": l2_smbios(cfg["l2.smbios"], vmid),
         "QAD_L2_VGA": cfg["l2.vga"],
+        "QAD_L2_OPTIONAL_PATCHES": ",".join(optional_patches(cfg)),
+        "QAD_L2_OEM_ID": cfg["l2.oem_id"],
+        "QAD_L2_OEM_TABLE_ID": cfg["l2.oem_table_id"],
+        "QAD_L2_OEM_REVISION": cfg["l2.oem_revision"],
+        "QAD_L2_OVMF_IDENTITY": "1" if cfg["l2.ovmf_identity_dir"] else "0",
         "QAD_L2_NET_PREFIX": str(prefix),
         "QAD_L2_BRIDGE_IP": bridge_ip,
         "QAD_L2_IP": l2_ip,

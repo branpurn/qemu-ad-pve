@@ -28,23 +28,32 @@ PREFIX=/opt/qemu-ad-test SRC_ROOT=/root/scratch-patch/src ./qemu-ad-pve.sh build
   **not** rebuilt.
 * Use a different `PREFIX` for a test build. Do not build over a QEMU that a running VM uses.
 
-## Use on the Windows L2 (not done by the repo; steps only)
+## Use on the Windows L2
 
-The live L2 runs `/opt/qemu-ad/bin/qemu-system-x86_64` (inside L1) from `w10-l2.service`. To try the patched binary
-without touching that one:
+`setup.sh` (opt-in, default off): set `l2.optional_patches` (and `l2.oem_id`, `l2.oem_table_id`, `l2.oem_revision`),
+run `setup.sh install` (step `l1_optional_qemu` builds `/opt/qemu-ad-optpatch` inside L1, `l1_scripts` writes
+`QB=` and `OEM_*` into `/etc/qemu-ad-l2.env`). `start-l2.sh` turns `OEM_ID` / `OEM_TABLE_ID` / `OEM_REVISION` into
+`-machine q35,accel=kvm,x-oem-id=...,x-oem-table-id=...,x-oem-revision=...`.
 
-1. Build into another prefix as above (e.g. `/opt/qemu-ad-optional`).
-2. Shut the L2 down cleanly (`systemctl stop w10-l2.service`, which does an ACPI shutdown).
-3. Start it with the new binary and, for the OEM identity, extra machine properties:
-   `QB=/opt/qemu-ad-optional/bin/qemu-system-x86_64` in `/etc/qemu-ad-l2.env` (`start-l2.sh` reads `QB`), and
-   `EXTRA="-machine q35,x-oem-id=ALASKA,x-oem-table-id='A M I   ',x-oem-revision=0x1072009"`
-   (`-machine` options merge; pad the table ID with spaces to 8 characters, ACPI uses space padding).
-4. Check inside Windows (PowerShell): `(Get-ItemProperty HKLM:\HARDWARE\DESCRIPTION\System).SystemBiosVersion`, and
-   list the ACPI tables with any ACPI table viewer (WAET must be absent).
-5. Revert: restore `QB`/`EXTRA` and restart.
+By hand on a running stack (this is what was live-tested, see below):
+
+1. Build in a **scratch VM** (not in the running L1) with `QAD_OPTIONAL_PATCHES=... PREFIX=/opt/qemu-ad-optpatch
+   ./qemu-ad-pve.sh build` and copy the tree to the same path in L1 (`tar -C /opt -c qemu-ad-optpatch | ssh L1 tar -C /opt -x`;
+   same Debian 13 userland, no missing libraries).
+2. In L1 back up `/etc/qemu-ad-l2.env` and `/root/w10/start-l2.sh`; append to `/etc/qemu-ad-l2.env`:
+   `QB=/opt/qemu-ad-optpatch/bin/qemu-system-x86_64`, `OEM_ID=ALASKA`, `OEM_TABLE_ID="A M I   "`, `OEM_REVISION=0x1072009`.
+3. `systemctl restart w10-l2`, then check inside Windows: `SystemBiosVersion`, and the ACPI tables
+   (`GetSystemFirmwareTable('ACPI')` from Python/ctypes; WAET must be absent).
+4. Revert: restore the env file backup (or delete the lines above) and `systemctl restart w10-l2`; `/opt/qemu-ad` was never touched.
+
+Do **not** put the OEM options into `EXTRA`: `start-l2.sh` word-splits `EXTRA` (quotes are not honoured, so a table
+ID with spaces breaks), and QEMU pads the table ID with NUL bytes, not spaces; pass it padded to 8 characters
+(`"A M I   "`) through `OEM_TABLE_ID`, which keeps the spaces.
 
 Switching binaries on the L2 is a different machine from the one Windows activated and was installed on; changing
 ACPI OEM IDs can trigger Windows to treat the platform as changed (re-activation prompts on OEM-licensed images).
+Live result 2026-10-09 on the L2 (Windows 10): booted normally, GPU Code 0, torch fp32 ~34.5 / fp16 ~101 TFLOP/s,
+verify PASS, full `qm shutdown`/`qm start` cycle fine; no activation prompt was observed.
 
 ## What was tested (scratch VM, no GPU, nothing on the live stack)
 
@@ -58,6 +67,6 @@ OVMF), tables read from `/sys/firmware/acpi/tables`:
 | FACP / APIC / DSDT / HPET / MCFG header | OEM `INTEL ` / `PC8086  ` / rev 0x1 | OEM `ALASKA` / `A M I` / rev 0x1072009 |
 | BGRT2 (added by OVMF, not QEMU) | `INTEL ` / `EDK2    ` / rev 0x2 | unchanged (comes from the firmware, see `scripts/ovmf-identity`) |
 
-Not tested: the Windows registry value `SystemBiosVersion` (no Windows scratch guest); its first string
-(`INTEL  - 1` today) is built by Windows from the FADT OEM ID and OEM revision, so it is expected to become
-`ALASKA - 1072009`; confirm on the L2 with step 4.
+Live L2 (Windows 10): `SystemBiosVersion` first string went from `INTEL  - 1` to `ALASKA - 1072009`; the WAET table
+is gone from `GetSystemFirmwareTable('ACPI')` (tables seen before: MCFG FACP APIC WAET HPET BGRT, all
+`INTEL ` / `PC8086  ` / rev 1; after: MCFG FACP APIC HPET BGRT, all `ALASKA` / `A M I   ` / rev 0x1072009).

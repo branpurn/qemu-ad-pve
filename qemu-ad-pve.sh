@@ -105,6 +105,17 @@ esac
 QEMU_SHA256="${QEMU_SHA256:-$_def_qemu_sha}"
 PATCH_SHA256="${PATCH_SHA256:-$_def_patch_sha}"
 
+# Optional patches (off by default; the built-in behaviour and every existing build are unchanged).
+# QAD_OPTIONAL_PATCHES is a comma/space separated list of names; each is a git-apply patch file
+# <OPTIONAL_PATCH_DIR>/<name>.patch, applied on top of the anti-detection patch:
+#   0001-acpi-omit-waet                 no ACPI WAET table (QEMU adds it unconditionally)
+#   0002-acpi-oem-id-table-id-revision  machine properties x-oem-id / x-oem-table-id / x-oem-revision take
+#                                       effect in every ACPI table header (the base patch hardcodes INTEL/PC8086/1)
+# See docs/optional-qemu-patches.md.
+_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPTIONAL_PATCH_DIR="${OPTIONAL_PATCH_DIR:-${_script_dir}/patches/optional/qemu-${QEMU_VER}}"
+QAD_OPTIONAL_PATCHES="${QAD_OPTIONAL_PATCHES:-}"
+
 SIDE_BIN="${PREFIX}/bin/qemu-system-x86_64"
 PATCH_DIR="${SRC_ROOT}/qemu-anti-detection"
 SRC_DIR="${SRC_ROOT}/qemu-${QEMU_VER}"
@@ -221,6 +232,42 @@ apply_patch() {
   date -Is > "$stamp"
 }
 
+# optional_patch_list: the requested optional patch names, one per line, sorted and de-duplicated.
+optional_patch_list() {
+  printf '%s\n' "${QAD_OPTIONAL_PATCHES//,/ }" | tr -s ' \t' '\n\n' | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+# apply_optional_patches: apply the requested optional patches after apply_patch. The applied set is
+# recorded in ${SRC_DIR}/.qemu-ad-optional-patches (no file = none). A tree that already carries a
+# different set is not touched: a patch cannot be taken back out, so the script stops and says how to
+# start from a clean tree. With nothing requested and nothing recorded this does nothing at all.
+apply_optional_patches() {
+  local want have name f stamp="${SRC_DIR}/.qemu-ad-optional-patches"
+  want=$(optional_patch_list)
+  if [[ -f $stamp ]]; then
+    have=$(cat "$stamp")
+    [[ $want == "$have" ]] || die "${SRC_DIR} carries the optional patches [$(tr '\n' ' ' <<<"$have")] but QAD_OPTIONAL_PATCHES asks for [$(tr '\n' ' ' <<<"$want")].
+Optional patches cannot be taken out of a patched tree: move ${SRC_DIR} away (it is re-extracted from the tarball) and run again with FORCE_REBUILD=1."
+    say "optional patches already applied: $(tr '\n' ' ' <<<"$have")"
+    return 0
+  fi
+  [[ -n $want ]] || return 0
+  for name in $want; do
+    [[ $name =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid optional patch name '${name}'"
+    f="${OPTIONAL_PATCH_DIR}/${name}.patch"
+    [[ -f $f ]] || die "no optional patch '${name}' for QEMU ${QEMU_VER}: ${f} missing
+available:
+$(ls -1 "${OPTIONAL_PATCH_DIR}"/*.patch 2>/dev/null | sed 's#.*/##; s#\.patch$##; s#^#  #' || true)"
+  done
+  for name in $want; do
+    f="${OPTIONAL_PATCH_DIR}/${name}.patch"
+    say "applying optional patch ${name}"
+    git -C "$SRC_DIR" apply --check "$f" || die "optional patch ${name} does not apply to ${SRC_DIR} (already partly applied? move the tree away and retry)"
+    git -C "$SRC_DIR" apply "$f"
+  done
+  printf '%s\n' "$want" > "$stamp"
+}
+
 # The installed side binary can differ from QEMU_VER (for example after an
 # earlier install with another version). Warn; do not rebuild implicitly.
 warn_version_skew() {
@@ -263,6 +310,15 @@ QAD_CONFIGURE_FLAGS=(
 )
 # Resolved at call time (PREFIX can be set after this file is read).
 build_stamp() { printf '%s' "${PREFIX}/.qemu-ad-configure-flags"; }
+# Stamp content: the configure flags, plus the optional patch set when there is one (so changing
+# QAD_OPTIONAL_PATCHES rebuilds, while a build without optional patches keeps its old stamp unchanged).
+build_stamp_content() {
+  local o
+  o=$(optional_patch_list | tr '\n' ',')
+  o=${o%,}
+  printf '%s' "${QAD_CONFIGURE_FLAGS[*]}"
+  [[ -z $o ]] || printf ' # optional-patches=%s' "$o"
+}
 
 # side_rebuild_reason: print why the installed side binary should be rebuilt;
 # print nothing when it is fine. With a build stamp the recorded flags are
@@ -273,7 +329,7 @@ side_rebuild_reason() {
   local stamp
   stamp=$(build_stamp)
   if [[ -f $stamp ]]; then
-    if [[ $(cat "$stamp") != "${QAD_CONFIGURE_FLAGS[*]}" ]]; then
+    if [[ $(cat "$stamp") != "$(build_stamp_content)" ]]; then
       printf 'it was built with different configure flags than this script uses (see %s)' "$stamp"
     fi
   else
@@ -309,7 +365,7 @@ build_qemu() {
     make install
   )
   [[ -x $SIDE_BIN ]] || die "build finished but ${SIDE_BIN} is missing"
-  printf '%s\n' "${QAD_CONFIGURE_FLAGS[*]}" > "$(build_stamp)"
+  printf '%s\n' "$(build_stamp_content)" > "$(build_stamp)"
   say "installed $($SIDE_BIN --version | head -1)"
 }
 
@@ -787,6 +843,7 @@ cmd_install() {
   install_deps
   fetch_sources
   apply_patch
+  apply_optional_patches
   build_qemu
   install_wrapper
   status
@@ -810,6 +867,7 @@ cmd_build() {
   install_deps
   fetch_sources
   apply_patch
+  apply_optional_patches
   build_qemu
   "${PREFIX}/bin/qemu-system-x86_64" --version | head -n1
 }
@@ -835,6 +893,9 @@ env overrides (set in the environment, e.g. QEMU_VER=10.2.2 $0 install):
   TARBALL_URL     QEMU source tarball URL
   QEMU_SHA256     expected SHA-256 of the tarball (built-in pin for 10.2.2)
   PATCH_SHA256    expected SHA-256 of the patch file (built-in pin for 10.2.2)
+  QAD_OPTIONAL_PATCHES  optional patches to apply after the base patch, comma separated (default none), e.g.
+                  "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"; see docs/optional-qemu-patches.md
+  OPTIONAL_PATCH_DIR  where they live (default ${OPTIONAL_PATCH_DIR})
   FORCE_REBUILD   1 = rebuild even if the side binary exists
   LIST_FILE       VMID list (default ${LIST_FILE}); purged by --purge
   WRAPPER_PATH    wrapper location (default ${WRAPPER_PATH})

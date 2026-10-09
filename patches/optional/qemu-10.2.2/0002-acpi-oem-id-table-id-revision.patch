@@ -1,0 +1,90 @@
+--- a/hw/acpi/aml-build.c
++++ b/hw/acpi/aml-build.c
+@@ -1703,6 +1703,8 @@
+     return var;
+ }
+ 
++uint32_t acpi_oem_revision = 1;
++
+ void acpi_table_begin(AcpiTable *desc, GArray *array)
+ {
+ 
+@@ -1722,10 +1724,11 @@
+     build_append_int_noprefix(array, 0, 4); /* Length */
+     build_append_int_noprefix(array, desc->rev, 1); /* Revision */
+     build_append_int_noprefix(array, 0, 1); /* Checksum */
+-    build_append_padded_str(array, ACPI_BUILD_APPNAME6, 6, '\0'); /* OEMID */
++    /* machine properties x-oem-id / x-oem-table-id / x-oem-revision; defaults are the same INTEL/PC8086/1 */
++    build_append_padded_str(array, desc->oem_id ? desc->oem_id : ACPI_BUILD_APPNAME6, 6, '\0'); /* OEMID */
+     /* OEM Table ID */
+-    build_append_padded_str(array, ACPI_BUILD_APPNAME8, 8, '\0');
+-    build_append_int_noprefix(array, 1, 4); /* OEM Revision */
++    build_append_padded_str(array, desc->oem_table_id ? desc->oem_table_id : ACPI_BUILD_APPNAME8, 8, '\0');
++    build_append_int_noprefix(array, acpi_oem_revision, 4); /* OEM Revision */
+     g_array_append_vals(array, "PTL ", 4); /* Creator ID */
+     build_append_int_noprefix(array, 1, 4); /* Creator Revision */
+ }
+--- a/hw/i386/x86.c
++++ b/hw/i386/x86.c
+@@ -309,6 +309,25 @@
+     strncpy(x86ms->oem_table_id, value, 8);
+ }
+ 
++static void x86_machine_get_oem_revision(Object *obj, Visitor *v, const char *name,
++                                         void *opaque, Error **errp)
++{
++    uint32_t value = acpi_oem_revision;
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void x86_machine_set_oem_revision(Object *obj, Visitor *v, const char *name,
++                                         void *opaque, Error **errp)
++{
++    uint32_t value;
++
++    if (!visit_type_uint32(v, name, &value, errp)) {
++        return;
++    }
++    acpi_oem_revision = value;
++}
++
+ static void x86_machine_get_bus_lock_ratelimit(Object *obj, Visitor *v,
+                                 const char *name, void *opaque, Error **errp)
+ {
+@@ -420,6 +439,13 @@
+                                           "The string may be up to 6 bytes in size");
+ 
+ 
++    object_class_property_add(oc, X86_MACHINE_OEM_REVISION, "uint32",
++                              x86_machine_get_oem_revision,
++                              x86_machine_set_oem_revision, NULL, NULL);
++    object_class_property_set_description(oc, X86_MACHINE_OEM_REVISION,
++                                          "Override the value of field OEM Revision "
++                                          "in ACPI table headers (default 1)");
++
+     object_class_property_add_str(oc, X86_MACHINE_OEM_TABLE_ID,
+                                   x86_machine_get_oem_table_id,
+                                   x86_machine_set_oem_table_id);
+--- a/include/hw/i386/x86.h
++++ b/include/hw/i386/x86.h
+@@ -103,6 +103,7 @@
+ #define X86_MACHINE_PIC              "pic"
+ #define X86_MACHINE_OEM_ID           "x-oem-id"
+ #define X86_MACHINE_OEM_TABLE_ID     "x-oem-table-id"
++#define X86_MACHINE_OEM_REVISION     "x-oem-revision"
+ #define X86_MACHINE_BUS_LOCK_RATELIMIT  "bus-lock-ratelimit"
+ 
+ #define TYPE_X86_MACHINE   MACHINE_TYPE_NAME("x86")
+--- a/include/hw/acpi/aml-build.h
++++ b/include/hw/acpi/aml-build.h
+@@ -416,6 +416,9 @@
+ 
+ void build_append_int_noprefix(GArray *table, uint64_t value, int size);
+ 
++/* OEM Revision written into every ACPI table header (default 1, machine property x-oem-revision) */
++extern uint32_t acpi_oem_revision;
++
+ typedef struct AcpiTable {
+     const char *sig;
+     const uint8_t rev;

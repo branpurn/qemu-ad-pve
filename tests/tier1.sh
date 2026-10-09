@@ -870,5 +870,31 @@ else
   note "C24 tests/tier2-gate-test.sh or tier2.sh not found next to the script; skipped"
 fi
 
+# ---- C25: optional QEMU patches (QAD_OPTIONAL_PATCHES) ---------------------------------------------
+mkdir -p "$W/opt/patches" "$W/opt/tree"
+printf 'one\ntwo\nthree\n' > "$W/opt/tree/a.txt"
+printf '%s\n' '--- a/a.txt' '+++ b/a.txt' '@@ -1,3 +1,3 @@' ' one' '-two' '+TWO' ' three' > "$W/opt/patches/p1.patch"
+c25() { env "$@" bash -c "source '$W/lib.sh'; set -euo pipefail; SRC_DIR='$W/opt/tree'; OPTIONAL_PATCH_DIR='$W/opt/patches'; PREFIX='$W/opt/prefix'; apply_optional_patches" >"$W/c25.out" 2>&1; }
+c25 QAD_OPTIONAL_PATCHES=
+chk "C25a nothing requested: no change, no stamp file" '[[ $? -eq 0 ]] && [[ ! -e "$W/opt/tree/.qemu-ad-optional-patches" ]] && grep -q "^two$" "$W/opt/tree/a.txt"'
+c25 QAD_OPTIONAL_PATCHES=nope
+chk "C25b unknown optional patch is refused and lists what exists" '[[ $? -ne 0 ]] && grep -q "no optional patch .nope." "$W/c25.out" && grep -q "  p1" "$W/c25.out" && grep -q "^two$" "$W/opt/tree/a.txt"'
+c25 "QAD_OPTIONAL_PATCHES=../x"
+chk "C25c path-like patch name is refused" '[[ $? -ne 0 ]] && grep -q "invalid optional patch name" "$W/c25.out"'
+c25 QAD_OPTIONAL_PATCHES=p1
+chk "C25d requested patch is applied and recorded" '[[ $? -eq 0 ]] && grep -q "^TWO$" "$W/opt/tree/a.txt" && [[ $(cat "$W/opt/tree/.qemu-ad-optional-patches") == p1 ]]'
+c25 "QAD_OPTIONAL_PATCHES=p1,"
+chk "C25e same set again is a no-op (idempotent)" '[[ $? -eq 0 ]] && grep -q "already applied" "$W/c25.out"'
+c25 QAD_OPTIONAL_PATCHES=
+chk "C25f a different set on a patched tree stops with instructions (no silent half state)" '[[ $? -ne 0 ]] && grep -q "cannot be taken out" "$W/c25.out"'
+st() { env "$@" bash -c "source '$W/lib.sh'; build_stamp_content" 2>/dev/null; }
+base_stamp=$(st QAD_OPTIONAL_PATCHES=)
+chk "C25g build stamp without optional patches is exactly the configure flags (existing builds not rebuilt)" '[[ $base_stamp != *optional* ]] && [[ $base_stamp == --target-list=* ]]'
+chk "C25h build stamp changes when optional patches are requested (side build gets rebuilt)" '[[ $(st "QAD_OPTIONAL_PATCHES=b a") == "$base_stamp # optional-patches=a,b" ]]'
+if [[ -d "$(dirname "$SCRIPT")/patches/optional/qemu-10.2.2" ]]; then
+  ok_n=0; for f in "$(dirname "$SCRIPT")"/patches/optional/qemu-10.2.2/*.patch; do grep -q '^+++ b/' "$f" && ok_n=$((ok_n+1)); done
+  chk "C25i shipped optional patches are git-apply style (+++ b/...)" '[[ $ok_n -ge 2 ]]'
+fi
+
 echo; echo "TIER1 RESULT: pass=$pass fail=$fail info=$info  (script: $SCRIPT)"
 [[ $fail -eq 0 ]]

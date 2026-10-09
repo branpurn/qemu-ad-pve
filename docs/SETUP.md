@@ -135,7 +135,7 @@ These end up in `/etc/qemu-ad-l2.env` (`CPU`, `L2_MAC`, `DISK_*`, `VGA`, `SMBIOS
 `start-l2.sh`. Changing `mac_oui` on an installed L2 changes its MAC; `l2net-up.sh` drops a stale DHCP lease
 that still holds the L2 address under the old MAC. Live-tested with GPU Code 0 and torch fp32 ~34.6 /
 fp16 ~101 TFLOP/s. Not changeable from QEMU arguments: the ACPI WAET table (QEMU adds it unconditionally in
-`hw/i386/acpi-build.c`; needs a QEMU patch), the OVMF firmware vendor string in the registry
+`hw/i386/acpi-build.c`; optional patch `0001-acpi-omit-waet`, see docs/optional-qemu-patches.md), the OVMF firmware vendor string in the registry
 `SystemBiosVersion`, and the PCI/chipset device IDs (Q35/ICH9 Intel IDs, already rewritten by the
 anti-detection patch).
 

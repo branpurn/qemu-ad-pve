@@ -134,3 +134,29 @@ def test_scp_argv_matches_ssh_hostkey_policy(tmp_path):
     assert c.ssh_argv("true")[c.ssh_argv("true").index("-o") + 1].startswith("BatchMode")
     ssh = c.ssh_argv("true")
     assert "StrictHostKeyChecking=yes" in ssh
+
+
+def test_l2_identity_helpers():
+    assert plan.l2_mac("9201", "a4:bf:01").startswith("a4:bf:01:")
+    assert plan.l2_mac("9201", "") .startswith("52:54:00:")
+    s1 = plan.l2_disk_serial("9201")
+    assert s1 == plan.l2_disk_serial("9201") and s1.startswith("S5GXNX0T") and len(s1) == 15
+    assert plan.l2_disk_serial("9201", "ABC123") == "ABC123"
+    assert plan.l2_smbios("none", "9201") == ""
+    lines = plan.l2_smbios("asus-am5", "9201").split("|")
+    assert [x.split(",")[0] for x in lines] == ["type=0", "type=1", "type=2", "type=3", "type=4", "type=17"]
+    assert "{" not in "".join(lines) and "QEMU" not in "".join(lines).upper()
+
+
+def test_l1_env_carries_l2_identity(tmp_path):
+    c = Config({"l2.windows_iso": "local:iso/w.iso"})
+    env = plan.l1_env(c, "abc", "9201", gpu(tmp_path), "amd", "CCCOMA X64", [])
+    vals = {}
+    for line in env.splitlines():
+        if line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            vals[k] = shlex.split(v)[0] if shlex.split(v) else ""
+    assert vals["QAD_L2_CPU"] == "host,-hypervisor,kvm=off"
+    assert vals["QAD_L2_MAC"].startswith("a4:bf:01:")
+    assert vals["QAD_L2_DISK_MODEL"] == "Samsung SSD 980 PRO 1TB" and vals["QAD_L2_DISK_SERIAL"]
+    assert vals["QAD_L2_SMBIOS"].count("|") == 5 and vals["QAD_L2_VGA"] == "std"

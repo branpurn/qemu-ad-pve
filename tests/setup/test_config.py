@@ -83,3 +83,18 @@ def test_stage_files_and_l2_addresses():
     assert cfg.stage_files() == [("nvidia_driver", "/root/nv.exe"), ("extra", "/a"), ("extra", "/b")]
     assert l2_addresses("10.254.77.0/24") == ("10.254.77.1", "10.254.77.10", "10.254.77.252", "10.254.77.253")
     assert norm_slot("0000:0E:00") == "0000:0e:00"
+
+
+@pytest.mark.parametrize("key,val,frag", [
+    ("mac_oui", "A4:BF:01", "mac_oui"), ("mac_oui", "01:00:5e", "unicast"), ("mac_oui", "a4:bf", "mac_oui"),
+    ("disk_model", "x,y", "disk_model"), ("smbios", "qemu", "smbios"), ("vga", "qxl", "vga"),
+])
+def test_l2_identity_rejects_bad_values(key, val, frag):
+    probs = cross_validate(Config({"l2." + key: val, "l2.windows_iso": "local:iso/w.iso"}))
+    assert any(frag in p for p in probs), probs
+
+
+def test_l2_identity_defaults_valid():
+    assert cross_validate(Config({"l2.windows_iso": "local:iso/w.iso"})) == []
+    assert cross_validate(Config({"l2.windows_iso": "local:iso/w.iso", "l2.mac_oui": "", "l2.disk_model": "",
+                                  "l2.smbios": "none", "l2.vga": "none"})) == []

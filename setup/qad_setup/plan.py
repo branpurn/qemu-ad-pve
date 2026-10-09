@@ -93,9 +93,41 @@ def qm_create(cfg: Config, vmid: str, install_id: str, gpu: Gpu, image_path: str
     return cmds
 
 
-def l2_mac(vmid: str) -> str:
+def l2_mac(vmid: str, oui: str = "52:54:00") -> str:
     h = hashlib.sha256(f"qad-l2-{vmid}".encode()).hexdigest()
-    return "52:54:00:" + ":".join(h[i:i + 2] for i in (0, 2, 4))
+    return (oui or "52:54:00") + ":" + ":".join(h[i:i + 2] for i in (0, 2, 4))
+
+
+def l2_disk_serial(vmid: str, serial: str = "") -> str:
+    if serial:
+        return serial
+    h = int(hashlib.sha256(f"qad-l2-disk-{vmid}".encode()).hexdigest()[:12], 16)
+    return f"S5GXNX0T{h % 1000000:06d}A"
+
+
+# One entry per -smbios argument. ",," is QEMU's escape for a comma; '|' is reserved by l1_env().
+SMBIOS_ASUS_AM5 = [
+    "type=0,vendor=American Megatrends Inc.,version=1654,date=01/12/2024,release=5.27",
+    "type=1,manufacturer=ASUS,product=System Product Name,version=System Version,"
+    "serial=System Serial Number,family=To be filled by O.E.M.",
+    "type=2,manufacturer=ASUSTeK COMPUTER INC.,product=ROG STRIX X670E-E GAMING WIFI,version=Rev 1.xx,"
+    "serial={board_serial},asset=Default string,location=Default string",
+    "type=3,manufacturer=Default string,version=Default string,serial=Default string,asset=Default string",
+    "type=4,sock_pfx=AM5,manufacturer=Advanced Micro Devices,, Inc.,"
+    "version=AMD Ryzen 9 7950X 16-Core Processor,max-speed=5700,current-speed=4500,"
+    "serial=Unknown,asset=Unknown,part=Unknown",
+    "type=17,loc_pfx=DIMM_A,bank=BANK 0,manufacturer=Kingston,serial={dimm_serial},asset=Unknown,"
+    "part=KF560C40-16,speed=6000",
+]
+
+
+def l2_smbios(profile: str, vmid: str) -> str:
+    """'|'-joined -smbios arguments for the L2 ('' = leave the patched-QEMU defaults)."""
+    if profile != "asus-am5":
+        return ""
+    h = hashlib.sha256(f"qad-l2-smbios-{vmid}".encode()).hexdigest()
+    return "|".join(x.format(board_serial="23" + str(int(h[:12], 16))[:13].ljust(13, "0"),
+                             dimm_serial=h[12:20].upper()) for x in SMBIOS_ASUS_AM5)
 
 
 # ------------------------------------------------------------------ cloud-init seed
@@ -168,7 +200,12 @@ def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
         "QAD_L2_SMP": cfg["l2.cores"],
         "QAD_L2_DISK_GB": cfg["l2.disk_gb"],
         "QAD_L2_CPU": cfg["l2.cpu"],
-        "QAD_L2_MAC": l2_mac(vmid),
+        "QAD_L2_MAC": l2_mac(vmid, cfg["l2.mac_oui"]),
+        "QAD_L2_DISK_MODEL": cfg["l2.disk_model"],
+        "QAD_L2_DISK_SERIAL": l2_disk_serial(vmid, cfg["l2.disk_serial"]) if cfg["l2.disk_model"] else "",
+        "QAD_L2_DISK_FW": cfg["l2.disk_firmware"],
+        "QAD_L2_SMBIOS": l2_smbios(cfg["l2.smbios"], vmid),
+        "QAD_L2_VGA": cfg["l2.vga"],
         "QAD_L2_NET_PREFIX": str(prefix),
         "QAD_L2_BRIDGE_IP": bridge_ip,
         "QAD_L2_IP": l2_ip,

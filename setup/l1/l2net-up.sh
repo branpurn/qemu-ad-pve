@@ -39,6 +39,11 @@ if [ -f "$RUN/dnsmasq.pid" ] && kill -0 "$(cat "$RUN/dnsmasq.pid")" 2>/dev/null;
   exit 0
 fi
 command -v dnsmasq >/dev/null || { echo "dnsmasq not found (apt-get install dnsmasq-base)" >&2; exit 2; }
+# A changed L2_MAC would otherwise lose to a stale lease that still holds L2IP under the old MAC.
+if [ -f "$RUN/dnsmasq.leases" ]; then
+  awk -v ip="$L2IP" -v mac="$MAC" '!($3==ip && tolower($2)!=tolower(mac))' "$RUN/dnsmasq.leases" >"$RUN/dnsmasq.leases.new" \
+    && mv "$RUN/dnsmasq.leases.new" "$RUN/dnsmasq.leases"
+fi
 dnsmasq --conf-file=/dev/null --interface="$BR" --bind-interfaces --except-interface=lo \
   --port=0 --dhcp-authoritative --dhcp-range="$DSTART,$DEND,12h" \
   --dhcp-host="$MAC,$L2IP" --dhcp-option=option:router --dhcp-option=option:dns-server \

@@ -99,7 +99,19 @@ SCHEMA: List[Key] = [
     Key("l2", "computer_name", "QAD-L2", "Windows computer name"),
     Key("l2", "timezone", "UTC", "Windows time zone id (e.g. 'Eastern Standard Time')"),
     Key("l2", "locale", "en-US", "Windows UI/input locale"),
-    Key("l2", "cpu", "host,-hypervisor", "L2 -cpu value (host + CPUID hypervisor bit cleared; Code 0 + CUDA verified)"),
+    Key("l2", "cpu", "host,-hypervisor,kvm=off",
+        "L2 -cpu value (hypervisor bit 31 cleared + KVM CPUID leaf 0x40000000 hidden; Code 0 + CUDA verified)"),
+    Key("l2", "mac_oui", "a4:bf:01",
+        "First 3 bytes of the L2 NIC MAC (default: an Intel OUI, the NIC is an Intel 82574L; empty = QEMU 52:54:00)"),
+    Key("l2", "disk_model", "Samsung SSD 980 PRO 1TB",
+        "Model string the L2 sees for its disk (empty = the patched QEMU default)"),
+    Key("l2", "disk_serial", "", "L2 disk serial (empty = derived from the L1 VMID)"),
+    Key("l2", "disk_firmware", "5B2QGXA7", "L2 disk firmware revision"),
+    Key("l2", "smbios", "asus-am5",
+        "SMBIOS identity of the L2 (types 0/1/2/3/4/17): asus-am5 | none (patched-QEMU defaults)"),
+    Key("l2", "vga", "std",
+        "std = emulated VGA (QEMU PCI 1234:1111; needed to watch the install over VNC); "
+        "none = no emulated VGA, the passed-through GPU is the only display (use after install)"),
     Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
     Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
         minimum=10),
@@ -352,6 +364,17 @@ def cross_validate(cfg: Config) -> List[str]:
         bad.append("l2.vnc must be 127.0.0.1:<display> (L1-local only) or none")
     if not re.fullmatch(r"[A-Za-z0-9_,=+.-]+", cfg["l2.cpu"]):
         bad.append("l2.cpu has unexpected characters")
+    if not re.fullmatch(r"([0-9a-f]{2}:){2}[0-9a-f]{2}|", cfg["l2.mac_oui"]):
+        bad.append("l2.mac_oui must look like a4:bf:01 (lower case) or be empty")
+    elif cfg["l2.mac_oui"] and int(cfg["l2.mac_oui"][:2], 16) & 1:
+        bad.append("l2.mac_oui must be a unicast OUI (first byte even)")
+    for k in ("l2.disk_model", "l2.disk_serial", "l2.disk_firmware"):
+        if not re.fullmatch(r"[A-Za-z0-9 ._-]{0,40}", cfg[k]):
+            bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
+    if cfg["l2.smbios"] not in ("asus-am5", "none"):
+        bad.append("l2.smbios must be asus-am5 or none")
+    if cfg["l2.vga"] not in ("std", "none"):
+        bad.append("l2.vga must be std or none")
     try:
         cfg.downloads()
     except ConfigError as exc:

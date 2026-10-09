@@ -255,6 +255,13 @@ step_scripts() {
   fi
   # one -smbios argument per line (start-l2.sh SMBIOS_FILE); empty profile = empty file
   printf '%s\n' "${QAD_L2_SMBIOS:-}" | tr '|' '\n' >"$W/smbios.txt"
+  # raw SMBIOS type 3 (chassis type 3 = Desktop; referenced as `file=` in smbios.txt); removed when opted out
+  if [ -n "${QAD_L2_CHASSIS_B64:-}" ]; then
+    printf '%s' "$QAD_L2_CHASSIS_B64" | base64 -d >"$W/smbios-type3.bin"
+    chmod 644 "$W/smbios-type3.bin"
+  else
+    rm -f "$W/smbios-type3.bin"
+  fi
   cat >/etc/qemu-ad-l2.env <<CONF
 # Written by setup.sh (qad-l1.sh scripts). Read by /root/w10/start-l2.sh and l2net-up.sh.
 GPU_IDS="$QAD_GPU_IDS"

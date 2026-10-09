@@ -1,3 +1,4 @@
+import base64
 import shlex
 
 from conftest import REPO, make_sysroot
@@ -146,6 +147,28 @@ def test_l2_identity_helpers():
     lines = plan.l2_smbios("asus-am5", "9201").split("|")
     assert [x.split(",")[0] for x in lines] == ["type=0", "type=1", "type=2", "type=3", "type=4", "type=17"]
     assert "{" not in "".join(lines) and "QEMU" not in "".join(lines).upper()
+
+
+def test_l2_chassis_desktop_default_and_opt_out(tmp_path):
+    t3 = plan.l2_chassis_bin("9201")
+    assert t3[0] == 3 and t3[1] == 0x15 and t3[5] == 3 and t3.endswith(b"\0\0")
+    strs = t3[0x15:].split(b"\0")[:4]
+    assert strs[0] == b"ASUSTeK COMPUTER INC." and strs[2].startswith(b"CS") and b"Default" not in b"".join(strs)
+    assert plan.l2_chassis_bin("9201") == t3 and plan.l2_chassis_bin("9202") != t3
+    lines = plan.l2_smbios("asus-am5", "9201", "/root/w10").split("|")
+    assert lines[3] == "file=/root/w10/smbios-type3.bin" and len(lines) == 6
+    assert plan.l2_smbios("asus-am5", "9201").split("|")[3].startswith("type=3,")
+    for d in ("desktop", "none"):
+        (tmp_path / d).mkdir()
+    for chassis, want in (("desktop", True), ("none", False)):
+        c = Config({"l2.windows_iso": "local:iso/w.iso", "l2.smbios_chassis": chassis})
+        env = plan.l1_env(c, "abc", "9201", gpu(tmp_path / chassis), "amd", "CCCOMA X64", [])
+        vals = {k: (shlex.split(v) or [""])[0] for k, v in (l.split("=", 1) for l in env.splitlines()
+                                                           if l and not l.startswith("#"))}
+        assert bool(vals["QAD_L2_CHASSIS_B64"]) is want
+        assert ("file=/root/w10/smbios-type3.bin" in vals["QAD_L2_SMBIOS"]) is want
+        if want:
+            assert base64.b64decode(vals["QAD_L2_CHASSIS_B64"]) == t3
 
 
 def test_l1_env_carries_l2_identity(tmp_path):

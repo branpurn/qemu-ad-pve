@@ -129,6 +129,7 @@ report a plausible desktop (answers-file keys under `[l2]`, all optional):
 |---|---|---|
 | `cpu` | `host,-hypervisor,kvm=off` | CPUID leaf 1 bit 31 clear, KVM leaf 0x40000000 empty |
 | `smbios` | `asus-am5` | SMBIOS types 0 (AMI BIOS), 1, 2 (ASUS board), 3, 4 (AM5 / Ryzen 9 7950X strings), 17 (Kingston DIMM) |
+| `smbios_chassis` | `desktop` | `desktop`: the type 3 (chassis) is a raw structure with chassis type 3 (Desktop) and ASUSTeK strings, written to `/root/w10/smbios-type3.bin` in L1 and passed as `-smbios file=` (QEMU's own type 3 is chassis type 1 "Other" / "Default string" and `-smbios type=3` cannot change the type). `none` keeps the `type=3` fields. Needs `smbios = asus-am5` |
 | `mac_oui` | `a4:bf:01` | an Intel OUI instead of QEMU's `52:54:00` |
 | `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
 | `vga` | `std` | `none` removes the emulated VGA (QEMU PCI 1234:1111); set it after the install, when VNC is no longer needed |

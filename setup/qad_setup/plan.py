@@ -136,13 +136,33 @@ SMBIOS_ASUS_AM5 = [
 ]
 
 
-def l2_smbios(profile: str, vmid: str) -> str:
-    """'|'-joined -smbios arguments for the L2 ('' = leave the patched-QEMU defaults)."""
+L2_CHASSIS_FILE = "smbios-type3.bin"  # next to start-l2.sh / smbios.txt in L1 (/root/w10)
+
+
+def l2_chassis_strings(vmid: str) -> List[str]:
+    """Type 3 strings of the L2 chassis: manufacturer, version, serial, asset tag."""
+    h = hashlib.sha256(f"qad-l2-chassis-{vmid}".encode()).hexdigest()
+    return ["ASUSTeK COMPUTER INC.", "1.00", "CS" + str(int(h[:12], 16))[:10].ljust(10, "0"), "No Asset Tag"]
+
+
+def l2_chassis_bin(vmid: str) -> bytes:
+    return smbios_type3_bin(strings=l2_chassis_strings(vmid))
+
+
+def l2_smbios(profile: str, vmid: str, chassis_dir: str = "") -> str:
+    """'|'-joined -smbios arguments for the L2 ('' = leave the patched-QEMU defaults).
+    chassis_dir: when set (l2.smbios_chassis=desktop) the type 3 entry becomes `file=<dir>/smbios-type3.bin`
+    (a raw structure with chassis type 3 = Desktop; `-smbios type=3` cannot set the chassis type)."""
     if profile != "asus-am5":
         return ""
     h = hashlib.sha256(f"qad-l2-smbios-{vmid}".encode()).hexdigest()
-    return "|".join(x.format(board_serial="23" + str(int(h[:12], 16))[:13].ljust(13, "0"),
-                             dimm_serial=h[12:20].upper()) for x in SMBIOS_ASUS_AM5)
+    out = []
+    for x in SMBIOS_ASUS_AM5:
+        if chassis_dir and x.startswith("type=3,"):
+            x = "file=" + chassis_dir.rstrip("/") + "/" + L2_CHASSIS_FILE
+        out.append(x.format(board_serial="23" + str(int(h[:12], 16))[:13].ljust(13, "0"),
+                            dimm_serial=h[12:20].upper()))
+    return "|".join(out)
 
 
 # ------------------------------------------------------------------ cloud-init seed
@@ -167,11 +187,14 @@ def smbios_type0_bin(vendor: str = "American Megatrends Inc.", version: str = "1
     return head + b"".join(x.encode() + b"\0" for x in (vendor, version, date)) + b"\0"
 
 
-def smbios_type3_bin(text: str = "Default string") -> bytes:
-    """SMBIOS type 3 (chassis), spec 2.3 layout (0x15 bytes), chassis type 3 (Desktop)."""
+def smbios_type3_bin(text: str = "Default string", strings: Optional[List[str]] = None) -> bytes:
+    """SMBIOS type 3 (chassis), spec 2.3 layout (0x15 bytes), chassis type 3 (Desktop).
+    strings = manufacturer, version, serial, asset tag (default: `text` four times)."""
+    strs = list(strings) if strings else [text] * 4
+    assert len(strs) == 4
     head = struct.pack("<BBHBBBBBBBBBIBBBB", 3, 0x15, 0x0300, 1, 3, 2, 3, 4, 3, 3, 3, 2, 0, 0, 1, 0, 0)
     assert len(head) == 0x15
-    return head + b"".join(text.encode() + b"\0" for _ in range(4)) + b"\0"
+    return head + b"".join(x.encode() + b"\0" for x in strs) + b"\0"
 
 
 def l1_smbios_files(vmid: str) -> Dict[str, bytes]:
@@ -270,6 +293,7 @@ def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
     bridge_ip, l2_ip, dstart, dend = l2_addresses(cfg["l2.net_cidr"])
     prefix = ipaddress.ip_network(cfg["l2.net_cidr"]).prefixlen
     au = cfg["l2.autounattend"]
+    chassis_dir = "/root/w10" if (cfg["l2.smbios"] == "asus-am5" and cfg["l2.smbios_chassis"] == "desktop") else ""
     values: Dict[str, str] = {
         "QAD_INSTALL_ID": install_id,
         "QAD_L1_VMID": vmid,
@@ -289,7 +313,8 @@ def l1_env(cfg: Config, install_id: str, vmid: str, gpu: Gpu, cpu_vendor: str,
         "QAD_L2_DISK_MODEL": cfg["l2.disk_model"],
         "QAD_L2_DISK_SERIAL": l2_disk_serial(vmid, cfg["l2.disk_serial"]) if cfg["l2.disk_model"] else "",
         "QAD_L2_DISK_FW": cfg["l2.disk_firmware"],
-        "QAD_L2_SMBIOS": l2_smbios(cfg["l2.smbios"], vmid),
+        "QAD_L2_SMBIOS": l2_smbios(cfg["l2.smbios"], vmid, chassis_dir),
+        "QAD_L2_CHASSIS_B64": base64.b64encode(l2_chassis_bin(vmid)).decode() if chassis_dir else "",
         "QAD_L2_VGA": cfg["l2.vga"],
         "QAD_L2_OPTIONAL_PATCHES": ",".join(optional_patches(cfg)),
         "QAD_L2_OEM_ID": cfg["l2.oem_id"],

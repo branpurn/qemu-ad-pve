@@ -114,6 +114,10 @@ SCHEMA: List[Key] = [
     Key("l2", "disk_firmware", "5B2QGXA7", "L2 disk firmware revision"),
     Key("l2", "smbios", "asus-am5",
         "SMBIOS identity of the L2 (types 0/1/2/3/4/17): asus-am5 | none (patched-QEMU defaults)"),
+    Key("l2", "smbios_chassis", "desktop",
+        "desktop = the L2 SMBIOS type 3 is a raw structure with chassis type 3 (Desktop) and ASUS strings "
+        "(QEMU's own type 3 is chassis type 1 'Other' with 'Default string'); none = the type=3 fields of l2.smbios. "
+        "Needs l2.smbios = asus-am5"),
     Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision",
         "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = both "
         "(omit the WAET table + configurable ACPI OEM ids). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
@@ -391,6 +395,8 @@ def cross_validate(cfg: Config) -> List[str]:
             bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
     if cfg["l2.smbios"] not in ("asus-am5", "none"):
         bad.append("l2.smbios must be asus-am5 or none")
+    if cfg["l2.smbios_chassis"] not in ("desktop", "none"):
+        bad.append("l2.smbios_chassis must be desktop or none")
     pats = [x for x in re.split(r"[,\s]+", cfg["l2.optional_patches"]) if x and x.lower() != "none"]
     if cfg["l2.optional_patches"].strip().lower() == "none":
         pats = []

@@ -14,6 +14,7 @@ $i = 0; Get-CimInstance Win32_PhysicalMemory | ForEach-Object { P "dimm.$i.manuf
 $i = 0; Get-CimInstance Win32_DiskDrive | ForEach-Object { P "disk.$i.model" $_.Model; P "disk.$i.firmware" $_.FirmwareRevision; $i++ }
 $i = 0; Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.MACAddress } | ForEach-Object { P "nic.$i.mac" $_.MACAddress; P "nic.$i.name" $_.Name; $i++ }
 $i = 0; Get-CimInstance Win32_VideoController | ForEach-Object { P "video.$i.name" $_.Name; P "video.$i.code" $_.ConfigManagerErrorCode; P "video.$i.driver" $_.DriverVersion; $i++ }
+$i = 0; Get-CimInstance Win32_CDROMDrive | ForEach-Object { P "cdrom.$i.name" $_.Name; P "cdrom.$i.media" $_.MediaLoaded; $i++ }
 P 'systeminfo.hypervisor_lines' ((systeminfo | Select-String -Pattern 'hypervisor' | Measure-Object).Count)
 # install residue (l2.cleanup_unattend / l2.cleanup_staging)
 P 'residue.unattend' ((@('C:\unattend.xml', 'C:\autounattend.xml', 'C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\UnattendGC', 'C:\Windows\Panther\actionqueue', 'C:\Windows\System32\Sysprep\unattend.xml') | Where-Object { Test-Path -LiteralPath $_ }) -join ',')

@@ -111,6 +111,8 @@ PATCH_SHA256="${PATCH_SHA256:-$_def_patch_sha}"
 #   0001-acpi-omit-waet                 no ACPI WAET table (QEMU adds it unconditionally)
 #   0002-acpi-oem-id-table-id-revision  machine properties x-oem-id / x-oem-table-id / x-oem-revision take
 #                                       effect in every ACPI table header (the base patch hardcodes INTEL/PC8086/1)
+#   0003-atapi-inquiry-from-model       ide-cd INQUIRY vendor/product follow -device ide-cd,model="VENDOR PRODUCT"
+#                                       (the base patch hardcodes ASUS / ASUS DVD-ROM)
 # See docs/optional-qemu-patches.md.
 _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPTIONAL_PATCH_DIR="${OPTIONAL_PATCH_DIR:-${_script_dir}/patches/optional/qemu-${QEMU_VER}}"
@@ -894,7 +896,7 @@ env overrides (set in the environment, e.g. QEMU_VER=10.2.2 $0 install):
   QEMU_SHA256     expected SHA-256 of the tarball (built-in pin for 10.2.2)
   PATCH_SHA256    expected SHA-256 of the patch file (built-in pin for 10.2.2)
   QAD_OPTIONAL_PATCHES  optional patches to apply after the base patch, comma separated (default none), e.g.
-                  "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"; see docs/optional-qemu-patches.md
+                  "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model"; see docs/optional-qemu-patches.md
   OPTIONAL_PATCH_DIR  where they live (default ${OPTIONAL_PATCH_DIR})
   FORCE_REBUILD   1 = rebuild even if the side binary exists
   LIST_FILE       VMID list (default ${LIST_FILE}); purged by --purge

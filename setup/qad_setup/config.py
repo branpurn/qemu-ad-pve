@@ -112,15 +112,22 @@ SCHEMA: List[Key] = [
         "Model string the L2 sees for its disk (empty = the patched QEMU default)"),
     Key("l2", "disk_serial", "", "L2 disk serial (empty = derived from the L1 VMID)"),
     Key("l2", "disk_firmware", "5B2QGXA7", "L2 disk firmware revision"),
+    Key("l2", "cdrom_model", "ASUS DRW-24B1ST",
+        "Model string of the L2 optical drive (ATAPI; first word = vendor in Windows). Used from the install on, so "
+        "Windows never sees another CD identity. Empty = the patched QEMU default ('ASUS DVD-ROM', shown as 'ASUS ASUS DVD-ROM')"),
+    Key("l2", "cdrom_firmware", "1.00", "Firmware revision of the L2 optical drive (needs l2.cdrom_model)"),
+    Key("l2", "detach_stage_iso", "yes",
+        "After the first successful verify, eject the staging ISO from the L2 CD drive and keep it detached after restarts "
+        "(the empty drive stays; the ISO file is kept in L1 for a reinstall). no = keep it attached"),
     Key("l2", "smbios", "asus-am5",
         "SMBIOS identity of the L2 (types 0/1/2/3/4/17): asus-am5 | none (patched-QEMU defaults)"),
     Key("l2", "smbios_chassis", "desktop",
         "desktop = the L2 SMBIOS type 3 is a raw structure with chassis type 3 (Desktop) and ASUS strings "
         "(QEMU's own type 3 is chassis type 1 'Other' with 'Default string'); none = the type=3 fields of l2.smbios. "
         "Needs l2.smbios = asus-am5"),
-    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision",
-        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = both "
-        "(omit the WAET table + configurable ACPI OEM ids). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
+    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model",
+        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = all three "
+        "(omit the WAET table + configurable ACPI OEM ids + ATAPI INQUIRY vendor/product from the CD model). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
         "(the L2 uses it via QB=; /opt/qemu-ad stays untouched). 'none' = opt out (the L2 keeps /opt/qemu-ad)"),
     Key("l2", "oem_id", "ALASKA", "ACPI OEM ID (<=6 chars); needs patch 0002. Empty = INTEL"),
     Key("l2", "oem_table_id", "A M I", "ACPI OEM table ID (<=8 chars, space padded); needs patch 0002"),
@@ -419,6 +426,11 @@ def cross_validate(cfg: Config) -> List[str]:
     if cfg["l2.ovmf_identity"] not in ("yes", "no"):
         bad.append("l2.ovmf_identity must be yes or no")
     # l2.oem_* only reach QEMU with patch 0002; without it they still style the rebuilt OVMF (not an error).
+    for k in ("l2.cdrom_model", "l2.cdrom_firmware"):
+        if not re.fullmatch(r"[A-Za-z0-9 ._-]{0,40}", cfg[k]):
+            bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
+    if cfg["l2.cdrom_firmware"] and not cfg["l2.cdrom_model"]:
+        bad.append("l2.cdrom_firmware needs l2.cdrom_model")
     if cfg["l2.vga"] not in ("std", "none"):
         bad.append("l2.vga must be std or none")
     try:

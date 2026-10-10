@@ -6,4 +6,5 @@ echo "l1.cpuinfo_hypervisor_flag=$(grep -m1 '^flags' /proc/cpuinfo | grep -qw hy
 for f in bios_vendor bios_version sys_vendor product_name board_vendor board_name chassis_type chassis_vendor; do
   echo "l1.dmi.$f=$(cat $d/$f 2>/dev/null || true)"
 done
+echo "l1.qemu_optpatches=$(sed 's/.*# optional-patches=//p;d' /opt/qemu-ad-optpatch/.qemu-ad-configure-flags 2>/dev/null)"
 echo "l1.kvm_dev=$([ -c /dev/kvm ] && echo present || echo missing)"

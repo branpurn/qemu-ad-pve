@@ -249,8 +249,14 @@ step_scripts() {
   install -m 644 "$REPO/tests/w10-code43-check.ps1" "$W/"
   [ -f /root/l2/OVMF_CODE.fd ] || install -m 644 /usr/share/OVMF/OVMF_CODE_4M.fd /root/l2/OVMF_CODE.fd
   [ -f "$W/l2_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "qad-l1-to-l2" -f "$W/l2_ed25519"
-  local extra=""
-  if [ -f "$W/stage.iso" ]; then
+  local extra="" cdrom=""
+  if [ -n "${QAD_L2_CDROM_MODEL:-}" ]; then
+    # start-l2.sh builds the drive (realistic model/firmware); STAGE_ISO inserts the staging CD until it is detached
+    cdrom="CDROM_MODEL=\"$QAD_L2_CDROM_MODEL\"
+CDROM_VER=\"${QAD_L2_CDROM_VER:-}\""
+    if [ -f "$W/stage.iso" ] && [ ! -f "$W/stage.detached" ]; then cdrom="$cdrom
+STAGE_ISO=$W/stage.iso"; fi
+  elif [ -f "$W/stage.iso" ] && [ ! -f "$W/stage.detached" ]; then
     extra="-drive file=$W/stage.iso,format=raw,if=none,id=stg,media=cdrom,readonly=on -device ide-cd,drive=stg,bus=ide.2"
   fi
   # one -smbios argument per line (start-l2.sh SMBIOS_FILE); empty profile = empty file
@@ -292,6 +298,7 @@ L2_DHCP_START=$QAD_L2_DHCP_START
 L2_DHCP_END=$QAD_L2_DHCP_END
 EXTRA="$extra"
 CONF
+  [ -z "$cdrom" ] || printf '%s\n' "$cdrom" >>/etc/qemu-ad-l2.env
   # OPT-IN identity settings (all default off; without them the env file is exactly as before).
   # Revert: empty the l2.* keys, `setup.sh install --redo l1_scripts`, `systemctl restart w10-l2`
   # (or copy back the /etc/qemu-ad-l2.env backup), or just delete the lines below.
@@ -429,6 +436,7 @@ step_stage() {
     mv "$W/autounattend.iso.tmp" "$W/autounattend.iso"
     rm -rf "$u"
   fi
+  rm -f "$W/stage.detached"  # a new staging ISO is attached again until the next first-verify detach
   step_scripts >/dev/null  # refresh EXTRA in /etc/qemu-ad-l2.env so normal boots see stage.iso
   say "stage.iso $(du -h "$W/stage.iso" | cut -f1)$([ -f "$W/autounattend.iso" ] && echo ', autounattend.iso')"
 }
@@ -606,9 +614,46 @@ step_hygiene() {
   ! grep -q '^HYGIENE_FAILED' "$W/hygiene.log" || echo "HYGIENE: some files could not be removed (see above)" >&2
 }
 
+# l2.detach_stage_iso: eject the staging CD now (QMP) and keep it out of /etc/qemu-ad-l2.env; the ISO file stays in L1.
+step_detach_stage() {
+  if [ "${QAD_L2_DETACH_STAGE:-1}" != 1 ]; then echo "STAGE_ISO=kept (l2.detach_stage_iso = no)"; return 0; fi
+  if [ ! -f "$W/stage.iso" ] || [ -f "$W/stage.detached" ]; then echo "STAGE_ISO=already detached"; return 0; fi
+  local pid out
+  pid=$(cat "$W/w10.pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    out=$({ printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"eject","arguments":{"device":"stg","force":true}}'; sleep 1; } |
+      timeout 5 socat - "UNIX-CONNECT:$W/qmp" 2>&1 || true)
+    case "$out" in *'"error"'*) echo "STAGE_ISO: eject reported an error (continuing; takes effect at the next L2 start)" >&2 ;; esac
+  fi
+  touch "$W/stage.detached"
+  step_scripts >/dev/null  # rewrite /etc/qemu-ad-l2.env without the ISO
+  echo "STAGE_ISO=detached (ISO file kept: $W/stage.iso)"
+}
+
+l2_cmdline() { tr '\0' ' ' <"/proc/$(cat "$W/w10.pid" 2>/dev/null || echo 0)/cmdline" 2>/dev/null || true; }
+
+# Restart the L2 (ACPI power-down via w10-l2.service, then start) and wait until SSH answers again.
+l2_restart() {
+  say "restarting $L2_UNIT (graceful ACPI power-down, then start)"
+  systemctl restart "$L2_UNIT" || return 1
+  local i
+  for i in $(seq 1 60); do
+    if l2_ssh 'exit 0' >/dev/null 2>&1; then say "L2 reachable over SSH again after ~$((i * 5)) s"; return 0; fi
+    sleep 5
+  done
+  return 1
+}
+
 # One-shot, after the first successful verify: every enabled post-install cleanup, then verify again.
 step_finalize() {
+  local restart=0 cl
   step_hygiene
+  step_detach_stage
+  cl=$(l2_cmdline)
+  # the running QEMU still has the old optical drive (model and/or inserted staging ISO): apply at once
+  if [ -n "${QAD_L2_CDROM_MODEL:-}" ] && [ "${cl#*"model=$QAD_L2_CDROM_MODEL"}" = "$cl" ]; then restart=1; fi
+  if [ ! -f "$W/stage.iso" ] || [ -f "$W/stage.detached" ]; then [ "${cl#*stage.iso}" = "$cl" ] || restart=1; fi
+  if [ "$restart" = 1 ]; then l2_restart || die "L2 did not come back after the restart (journalctl -u $L2_UNIT; restore /etc/qemu-ad-l2.env backup)"; fi
   step_verify
 }
 
@@ -651,6 +696,7 @@ case "$step" in
   l2-wipe) step_l2_wipe ;;
   verify) step_verify ;;
   hygiene) step_hygiene ;;
+  detach-stage) step_detach_stage ;;
   finalize) step_finalize ;;
   audit) step_audit ;;
   status) step_status ;;

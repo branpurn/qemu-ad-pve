@@ -9,14 +9,15 @@ the build stamp and the binary are exactly what they were before) but **on by de
 |---|---|
 | `0001-acpi-omit-waet` | QEMU adds the ACPI **WAET** (Windows ACPI Emulated Devices Table) unconditionally at the end of `acpi_build()` in `hw/i386/acpi-build.c`; the patch drops the `acpi_add_table()` + `build_waet()` pair (the function stays, marked unused). No machine property: the table is gone from the binary. |
 | `0002-acpi-oem-id-table-id-revision` | The base patch hardcodes OEM ID `INTEL `, OEM table ID `PC8086  ` and OEM revision `1` in `acpi_table_begin()`, so the stock machine properties `x-oem-id` / `x-oem-table-id` had no effect. This patch honours them again (their defaults are the same `INTEL `/`PC8086  `, so default behaviour is identical) and adds `x-oem-revision` (uint32, default 1; hex such as `0x1072009` works). |
+| `0003-atapi-inquiry-from-model` | `ide-cd` has settable `model=` / `ver=` (IDENTIFY PACKET and the INQUIRY revision), but the ATAPI INQUIRY vendor/product strings are hardcoded (`ASUS` / `ASUS DVD-ROM` in the base patch, QEMU / QEMU DVD-ROM upstream), and Windows names the drive from the INQUIRY: `ASUS ASUS DVD-ROM`. The patch derives them from `model=` (first word = vendor, rest = product; `model="ASUS DRW-24B1ST"` shows as `ASUS DRW-24B1ST`). Used by `l2.cdrom_model`. |
 
-The two patches touch different files and are independent.
+The patches touch different files (0001/0002 `hw/i386/acpi-build.c`, 0003 `hw/ide/atapi.c`) and are independent.
 
 ## Build
 
 ```
 # in L1 (nested) or on a build host; the same script that builds the side QEMU
-QAD_OPTIONAL_PATCHES=0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision \
+QAD_OPTIONAL_PATCHES=0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model \
 PREFIX=/opt/qemu-ad-test SRC_ROOT=/root/scratch-patch/src ./qemu-ad-pve.sh build
 ```
 

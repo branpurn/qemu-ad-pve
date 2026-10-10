@@ -51,6 +51,9 @@ find_win_cd() {
 }
 
 CDS=()
+# same optical-drive identity at install time as in normal boots (no extra Windows device identities)
+CDOPT=""
+[ -z "${CDROM_MODEL:-}" ] || CDOPT=",model=$CDROM_MODEL${CDROM_VER:+,ver=$CDROM_VER}"
 case "$QAD_L2_SOURCE" in
   iso)
     WINCD=$(find_win_cd) || fail "Windows ISO with label '$QAD_WIN_ISO_LABEL' not found among L1 CD drives"
@@ -58,9 +61,9 @@ case "$QAD_L2_SOURCE" in
     if grep -q . <<<"$(lsblk -no FSTYPE "$WD")"; then  # not `lsblk | grep -q` (SIGPIPE + pipefail)
       fail "$WD is not blank (a previous, unfinished install?). To start over: setup.sh install --redo l2_install --wipe-l2-disk"
     fi
-    CDS+=(-drive "file=$WINCD,format=raw,if=none,id=wincd,media=cdrom,readonly=on" -device "ide-cd,drive=wincd,bus=ide.0")
+    CDS+=(-drive "file=$WINCD,format=raw,if=none,id=wincd,media=cdrom,readonly=on" -device "ide-cd,drive=wincd,bus=ide.0$CDOPT")
     if [ -f "$W/autounattend.iso" ]; then
-      CDS+=(-drive "file=$W/autounattend.iso,format=raw,if=none,id=unat,media=cdrom,readonly=on" -device "ide-cd,drive=unat,bus=ide.2")
+      CDS+=(-drive "file=$W/autounattend.iso,format=raw,if=none,id=unat,media=cdrom,readonly=on" -device "ide-cd,drive=unat,bus=ide.2$CDOPT")
     fi
     ;;
   image)
@@ -69,7 +72,7 @@ case "$QAD_L2_SOURCE" in
   *) fail "QAD_L2_SOURCE=$QAD_L2_SOURCE" ;;
 esac
 if [ -f "$W/stage.iso" ]; then
-  CDS+=(-drive "file=$W/stage.iso,format=raw,if=none,id=stg,media=cdrom,readonly=on" -device "ide-cd,drive=stg,bus=ide.3")
+  CDS+=(-drive "file=$W/stage.iso,format=raw,if=none,id=stg,media=cdrom,readonly=on" -device "ide-cd,drive=stg,bus=ide.3$CDOPT")
 fi
 echo "disk=$WD cds=${CDS[*]}"
 

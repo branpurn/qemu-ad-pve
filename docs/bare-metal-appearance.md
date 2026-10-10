@@ -17,6 +17,7 @@ a lab; it is not a way to defeat anti-cheat or other integrity systems and has n
 | Disk model / serial / firmware (Samsung SSD 980 PRO 1TB) | L2 | `l2.disk_model`, `l2.disk_serial` (derived), `l2.disk_firmware` | `start-l2.sh` `DISKOPTS` |
 | ACPI WAET table removed; ACPI OEM id / table id / revision `ALASKA` / `A M I` / `0x1072009` on every table QEMU writes | L2 | `l2.optional_patches` (both patches, built in L1) | `patches/optional/qemu-10.2.2/`, `steps.s_l1_optional_qemu`, docs/optional-qemu-patches.md |
 | Registry `SystemBiosVersion` = `ALASKA - 1072009`, `1654`, `American Megatrends International, LLC. - 5001B` | L2 | `l2.ovmf_identity = yes` (OVMF built in L1) | `scripts/ovmf-identity/`, `steps.s_l1_ovmf_identity`, docs/ovmf-identity.md |
+| Optical drive named like a real one: Windows shows `ASUS DRW-24B1ST` (default) instead of the base patch's `ASUS ASUS DVD-ROM`; the same identity is used from the install on, and the staging ISO is ejected after the first successful verify (the empty drive stays; `stage.iso` stays in L1 for a reinstall) | L2 | `l2.cdrom_model`, `l2.cdrom_firmware`, `l2.detach_stage_iso` | `start-l2.sh` (`CDROM_MODEL`/`CDROM_VER`/`STAGE_ISO`), `qad-l2-create.sh`, optional QEMU patch `0003-atapi-inquiry-from-model` (needed because `ide-cd` takes `model=`/`ver=` but its INQUIRY strings are hardcoded), `qad-l1.sh detach-stage` |
 | QEMU PCI/chipset IDs rewritten | L2 | always (qemu-anti-detection patch) | `qemu-ad-pve.sh` |
 | No install residue: `C:\Windows\Panther\unattend.xml` (+ `UnattendGC`, `actionqueue`, Setup/Panther logs, other answer-file copies) removed | L2 | `l2.cleanup_unattend = yes` | `setup/l1/windows/hygiene.ps1` run by the `l2_finalize` step (`qad-l1.sh finalize`) after the first successful verify |
 | No staging leftovers: `C:\qad\nvidia`, `python`, `openssh`, `firstlogon.*`, `gpu-driver.*`, `w10-code43-check.ps1` removed (kept: `venv`, `py`, `audit`, `authorized_keys`, `pytorch-offline-bench.py` which `setup.sh verify` runs; sshd and the admin account) | L2 | `l2.cleanup_staging = yes` | same script; skipped while the NVIDIA driver is not installed yet |
@@ -37,7 +38,7 @@ The PVE host itself stays stock (no host package, kernel, modprobe or `storage.c
 * **Stale registry `Enum` keys**: Windows keeps device instance keys (`HKLM\SYSTEM\CurrentControlSet\Enum`) of the
   devices it saw during the install (e.g. Standard VGA, the QEMU/ICH9 devices); they stay until removed by hand or by a
   reinstall without them.
-* **CD-ROM name**: the patched QEMU reports the CD-ROM as `ASUS ASUS DVD-ROM` (not `QEMU DVD-ROM`); the staging CD is attached during install/first boot.
+* **CD-ROM name**: with the base patch alone the drive is `ASUS ASUS DVD-ROM` (not `QEMU DVD-ROM`); the realistic model needs optional patch 0003 (default on, built in L1). A QEMU built without it keeps `ASUS ASUS DVD-ROM` (the audit row is INFO then). Stale CD entries of earlier identities are removed by the stale-device cleanup.
 * PCI device list in general (Q35/ICH9 bridges, virtio/AHCI/e1000e controllers, USB tablet), timing behaviour (TSC,
   RDTSCP/latency measurements), the `QEMU` / `Bochs` strings in the DSDT/SSDT that Windows does not enumerate, and a
   hypervisor seen by anything that runs on the PVE host.

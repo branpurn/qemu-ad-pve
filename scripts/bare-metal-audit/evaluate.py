@@ -183,6 +183,20 @@ def evaluate(env, facts):
     else:
         r.add("SKIP", "ACPI / registry", "not collected", "")
 
+    cdn, cdm = indexed(facts, "cdrom", "name"), indexed(facts, "cdrom", "media")
+    cmodel = env.get("QAD_L2_CDROM_MODEL", "")
+    if cmodel and "0003-atapi-inquiry-from-model" not in facts.get("l1.qemu_optpatches", "0003-atapi-inquiry-from-model"):
+        r.add("INFO", "L2 optical drive model", ", ".join(cdn) or "none",
+              "(QEMU built without patch 0003, shown as the base 'ASUS ASUS DVD-ROM'; rebuild l1_optional_qemu to get %s)" % cmodel)
+    elif cmodel:
+        r.check("L2 optical drive model", cmodel in cdn, ", ".join(cdn) or "none", cmodel)
+    else:
+        r.add("INFO", "L2 optical drive", ", ".join(cdn) or "none", "(l2.cdrom_model empty: patched QEMU default)")
+    if env.get("QAD_L2_DETACH_STAGE", "1") == "1":
+        r.check("L2 optical drive media (staging ISO detached)", "True" not in cdm, ", ".join(cdm) or "none", "no media")
+    else:
+        r.add("INFO", "L2 optical drive media", ", ".join(cdm) or "none", "(l2.detach_stage_iso = no)")
+
     if "residue.unattend" in facts:
         for key, label, opt in (("residue.unattend", "Answer-file residue (unattend.xml, Panther)", "QAD_L2_CLEAN_UNATTEND"),
                                 ("residue.staging", "Staging residue (C:\\qad installers, firstlogon/gpu-driver)", "QAD_L2_CLEAN_STAGING")):

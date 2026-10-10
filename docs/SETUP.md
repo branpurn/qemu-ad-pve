@@ -77,7 +77,7 @@ What you need before starting:
    | `l1_packages` | L1 | kernel + headers, dkms, build tools, ovmf, dnsmasq-base, genisoimage, …; reboots L1 if a newer kernel was installed; `apt-mark hold` the kernel |
    | `l1_dkms` | L1 | patched KVM via `dkms/` (`l1.kvm_source=debian`: `arch/x86/kvm` + `virt/kvm` from the matching Debian `linux-source`, like the lab build; `upstream`: `dkms/fetch-kvm-source.sh`), modules-load, check that `modinfo kvm` resolves to `updates/dkms` |
    | `l1_qemu_ad` | L1 | `copy`: read-only `tar` of the host's `/opt/qemu-ad` into L1 (the lab method, docs/gpu-phase-patched-kvm-l1.md); `build`: `qemu-ad-pve.sh build` in L1 (new subcommand: deps, fetch, patch, build; no divert/wrapper) |
-   | `l1_optional_qemu` | L1 | **default ON** (`l2.optional_patches` = `0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision`; `none` skips it; ~4 min): second QEMU built in L1 in `/opt/qemu-ad-optpatch` with the optional patches (docs/optional-qemu-patches.md); `/opt/qemu-ad` is not touched |
+   | `l1_optional_qemu` | L1 | **default ON** (`l2.optional_patches` = `0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model`; `none` skips it; ~4 min): second QEMU built in L1 in `/opt/qemu-ad-optpatch` with the optional patches (docs/optional-qemu-patches.md); `/opt/qemu-ad` is not touched |
    | `l1_ovmf_identity` | L1 | **default ON** (`l2.ovmf_identity = yes`; `no` skips it; ~7 min): OVMF with another firmware identity built **in L1** (scripts/ovmf-identity, docs/ovmf-identity.md) to `/opt/ovmf-identity/OVMF_CODE.fd`; alternatively `l2.ovmf_identity_dir` copies a prebuilt `OVMF_CODE_4M.fd` (sha256-checked). New path; `/root/l2/OVMF_CODE.fd` and `VARS.fd` are kept |
    | `l1_vfio` | L1 | `vfio-pci ids=<GPU ids>` + softdeps, initramfs |
    | `l1_scripts` | L1 | `/root/w10` (start-l2.sh, resolve-windows-disk.sh, l2net-up/down.sh, qad-qmp.py, and `l2-service.sh` from `scripts/qm-native-9200`), `OVMF_CODE.fd`, `/etc/qemu-ad-l2.env`, `w10-l2.service` from `scripts/qm-native-9200` (installed, not enabled yet). Both are copied verbatim when the L1 GPU address is the lab's `02:01.0/.1`; otherwise only the GPU BDF list and the `ConditionPathExists` path are adapted |
@@ -134,6 +134,8 @@ report a plausible desktop (answers-file keys under `[l2]`, all optional):
 | `mac_oui` | `a4:bf:01` | an Intel OUI instead of QEMU's `52:54:00` |
 | `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
 | `vga` | `std` | `none` removes the emulated VGA (QEMU PCI 1234:1111); set it after the install, when VNC is no longer needed |
+| `cdrom_model` / `cdrom_firmware` | `ASUS DRW-24B1ST` / `1.00` | the optical drive Windows sees (empty model = patched QEMU default `ASUS ASUS DVD-ROM`); needs optional patch 0003 |
+| `detach_stage_iso` | `yes` | after the first successful verify the staging ISO is ejected and stays detached across restarts (the file stays in L1) |
 | `cleanup_unattend` | `yes` | after the first successful verify the `l2_finalize` step deletes `unattend.xml`, `UnattendGC`, `actionqueue` and the Setup/Panther logs in the L2 |
 | `cleanup_staging` | `yes` | same step deletes the staged installers and one-shot first-boot scripts/logs in `C:\qad` (keeps `venv`, `py`, `audit`, `pytorch-offline-bench.py`, sshd, the admin account) |
 

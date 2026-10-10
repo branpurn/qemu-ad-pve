@@ -72,3 +72,18 @@ OVMF), tables read from `/sys/firmware/acpi/tables`:
 Live L2 (Windows 10): `SystemBiosVersion` first string went from `INTEL  - 1` to `ALASKA - 1072009`; the WAET table
 is gone from `GetSystemFirmwareTable('ACPI')` (tables seen before: MCFG FACP APIC WAET HPET BGRT, all
 `INTEL ` / `PC8086  ` / rev 1; after: MCFG FACP APIC HPET BGRT, all `ALASKA` / `A M I   ` / rev 0x1072009).
+
+## Patch 0003 live test (2026-10-10, running VM 9320, no reinstall)
+
+Built inside L1 with `QAD_OPTIONAL_PATCHES=0001-...,0002-...,0003-... PREFIX=/opt/qemu-ad-w2 SRC_ROOT=/opt/src-w2 ./qemu-ad-pve.sh build`
+(nice 15, about 5 min, source tree copied from the earlier build so nothing was downloaded; `/opt/qemu-ad` and `/opt/qemu-ad-optpatch` untouched), then
+`QB=/opt/qemu-ad-w2/bin/qemu-system-x86_64` in `/etc/qemu-ad-l2.env` and `systemctl restart w10-l2`
+(backup of env and start script in `L1:/root/backup-wave2/A`; revert = copy the env backup back and restart).
+
+| | before (patches 0001+0002) | after (0001-0003) |
+|---|---|---|
+| `Win32_CDROMDrive.Name` | `ASUS ASUS DVD-ROM` (`SCSI\CDROM&VEN_ASUS&PROD_ASUS_DVD-ROM`) | `ASUS DRW-24B1ST` (`SCSI\CDROM&VEN_ASUS&PROD_DRW-24B1ST`) |
+
+GPU Code 0, driver 576.88, `setup.sh verify` PASS, torch fp32 34.55 / fp16 101.22 TFLOP/s. The old CD instance became a ghost and was
+removed by the stale-device cleanup (`qad-l1.sh ghosts`, no code change needed). The audit reads the patch set from the QEMU that the env file's
+`QB` points to (it used to look only at `/opt/qemu-ad-optpatch`), so a build at another path is judged correctly.

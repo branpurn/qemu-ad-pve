@@ -658,6 +658,18 @@ step_ghosts() {
   case "$out" in *"failed=0"*) ;; *) echo "GHOSTS: some keys could not be removed (see above)" >&2 ;; esac
 }
 
+# l2.edid_monitor (experimental, default none): registry EDID override for the monitor node, see docs/bare-metal-appearance.md.
+step_edid() {
+  if [ "${QAD_L2_EDID:-none}" = none ]; then echo "EDID=off (l2.edid_monitor = none)"; return 0; fi
+  local b64
+  b64=$(python3 "$REPO/setup/l1/edid.py" "$QAD_L2_EDID") || die "unknown EDID profile $QAD_L2_EDID"
+  l2_ssh 'exit 0' >/dev/null 2>&1 || die "L2 not reachable over SSH; EDID needs it"
+  l2_scp "$REPO/setup/l1/windows/edid.ps1" 'C:/Windows/Temp/qad-edid.ps1' || die "scp edid.ps1 failed"
+  l2_scp "$REPO/setup/l1/windows/edid-run.ps1" 'C:/Windows/Temp/qad-edid-run.ps1' || die "scp edid-run.ps1 failed"
+  l2_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\qad-edid-run.ps1 -EdidB64 $b64 -Apply 1 -Remove 0" | tr -d '\r'
+  l2_ssh 'powershell -NoProfile -Command "Remove-Item -Recurse -Force C:\Windows\Temp\qad-edid*,C:\Windows\Temp\qad-edid-backup -ErrorAction SilentlyContinue"' >/dev/null 2>&1 || true
+}
+
 # After l2.vga_after_verify = none: the RTX is the only display adapter and the autologon desktop runs.
 step_vga_check() {
   l2_scp "$REPO/setup/l1/windows/vga-check.ps1" 'C:/Windows/Temp/qad-vga-check.ps1' || return 1
@@ -708,6 +720,7 @@ step_finalize() {
     step_scripts >/dev/null  # VGA=none in /etc/qemu-ad-l2.env
     echo "VGA=none (emulated VGA 1234:1111 switched off; revert: rm $W/vga.switched; qad-l1.sh scripts; restart $L2_UNIT)"
   fi
+  step_edid
   cl=$(l2_cmdline)
   # the running QEMU still has the old optical drive (model and/or inserted staging ISO) or the emulated VGA: apply at once
   if [ -n "${QAD_L2_CDROM_MODEL:-}" ] && [ "${cl#*"model=$QAD_L2_CDROM_MODEL"}" = "$cl" ]; then restart=1; fi
@@ -771,6 +784,7 @@ case "$step" in
   verify) step_verify ;;
   hygiene) step_hygiene ;;
   detach-stage) step_detach_stage ;;
+  edid) step_edid ;;
   ghosts) step_ghosts ;;
   vga-check) step_vga_check ;;
   finalize) step_finalize ;;

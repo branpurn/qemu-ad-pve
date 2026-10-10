@@ -36,8 +36,16 @@ The PVE host itself stays stock (no host package, kernel, modprobe or `storage.c
 
 ## Not feasible (not hidden, by design or limitation)
 
-* **Monitor EDID**: with no physical monitor there is no EDID; Windows shows a generic or no monitor. A real model name would
-  need a physical display or an EDID override on the GPU output, which a VM cannot provide.
+* **Monitor EDID** (tried live on the lab host, driver 576.88, VGA off): with no monitor attached the RTX reports no display
+  target, so Windows has no real monitor node, only the placeholder `DISPLAY\Default_Monitor\...` entries ("Generic Non-PnP
+  Monitor", `Win32_DesktopMonitor` = "Default Monitor", `WmiMonitorID` empty). (a) A registry EDID / `EDID_OVERRIDE\0` value written
+  to those nodes (as SYSTEM, `setup/l1/windows/edid.ps1`, EDID from `setup/l1/edid.py`: valid checksum, ASUS/Dell 24" profile)
+  survived an L2 restart but changed nothing: no monitor appeared and the names stayed generic. (b) NVIDIA has no documented
+  per-output EDID override on GeForce/Windows (the `NvAPI_GPU_SetEdid` call is unsupported there; the undocumented
+  `nvlddmkm\State\DisplayDatabase\EdidLockData` trick reportedly cannot be removed reliably and was deliberately not tried).
+  (c) What works: a physical **HDMI/DisplayPort EDID emulator dongle** (EDID of a real monitor), or a third-party virtual
+  display driver (IDD), which this project does not install. `l2.edid_monitor` (default `none`) keeps the experimental
+  registry route available; the audit shows an INFO row with the monitor name Windows reports.
 * **Stale registry `Enum` keys that are not device instances of the three classes above** (e.g. old volume entries,
   QEMU/ICH9 devices that are still present) stay; present devices cannot be removed.
 * **CD-ROM name**: with the base patch alone the drive is `ASUS ASUS DVD-ROM` (not `QEMU DVD-ROM`); the realistic model needs optional patch 0003 (default on, built in L1). A QEMU built without it keeps `ASUS ASUS DVD-ROM` (the audit row is INFO then). Stale CD entries of earlier identities are removed by the stale-device cleanup.

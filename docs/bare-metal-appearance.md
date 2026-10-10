@@ -21,6 +21,10 @@ a lab; it is not a way to defeat anti-cheat or other integrity systems and has n
 | Emulated Standard VGA (PCI 1234:1111) gone: the RTX is the only display adapter (the L2 restarts once after the first successful verify; reverted automatically when verify, the display check (`vga-check.ps1`: RTX only, Code 0, `dwm.exe` running in the console session) fails) | L2 | `l2.vga_after_verify = none` | `qad-l1.sh finalize` (`vga.switched` marker, `VGA=none` in `/etc/qemu-ad-l2.env`) |
 | Stale device instance keys of earlier identities removed (old CD-ROM instances, install-time `ASUS HARDDISK`, the Standard VGA after it is gone); keys exported to `/root/w10/ghost-backup/` in L1 first; present, NVIDIA, Samsung and volume entries are never touched | L2 | `l2.cleanup_ghosts = yes` | `setup/l1/windows/ghosts.ps1` as SYSTEM via a one-shot scheduled task (`qad-l1.sh ghosts`) |
 | GPU root port ("rpg") advertises a CPU-like Gen4 x16 link instead of QEMU's Gen4 x32 default | L2 | `l2.gpu_link_speed = 16`, `l2.gpu_link_width = 16` (empty = QEMU default) | `start-l2.sh` (`GPU_LINK_SPEED`/`GPU_LINK_WIDTH` -> `pcie-root-port,...,x-speed=16,x-width=16`), `qad-l2-create.sh` |
+| e1000e (82574L) subsystem `1043:8369` (a real ASUS onboard 82574L) instead of `8086:0000` | L2 | `l2.nic_subsystem = 1043:8369` (empty = QEMU default) | `start-l2.sh` (`NIC_SUBSYS_*` -> stock `subsys_ven`/`subsys`), `qad-l2-create.sh` |
+| ICH9 LPC/AHCI/SMBus/USB and host bridge subsystem `1043:8877` (ASUS) instead of `8086:8086` | L2 | `l2.pci_subsystem = 1043:8877`, optional patch 0004 | `start-l2.sh` (`PCI_SUBSYS_*` -> `-global q35-pcihost.x-pci-sub-*`) |
+| No QEMU USB tablet (`USB\VID_0627&PID_0001`) once the emulated VGA is off; the UHCI/EHCI controllers stay | L2 | `l2.usb_tablet = auto` (yes/no) | `start-l2.sh` (`USB_TABLET`), `qad-l1.sh scripts` |
+| No hidden fw_cfg ACPI device (`ACPI\ASUS0002`, Code 28) | L2 | optional patch 0005 | `patches/optional/qemu-10.2.2/0005-acpi-omit-fwcfg-device.patch` |
 | QEMU PCI/chipset IDs rewritten | L2 | always (qemu-anti-detection patch) | `qemu-ad-pve.sh` |
 | No install residue: `C:\Windows\Panther\unattend.xml` (+ `UnattendGC`, `actionqueue`, Setup/Panther logs, other answer-file copies; the audit row looks at the answer files and `actionqueue`: Windows itself recreates a few hundred bytes of `Panther\UnattendGC` logs, without credentials, at every boot) removed | L2 | `l2.cleanup_unattend = yes` | `setup/l1/windows/hygiene.ps1` run by the `l2_finalize` step (`qad-l1.sh finalize`) after the first successful verify |
 | No staging leftovers: `C:\qad\nvidia`, `python`, `openssh`, `firstlogon.*`, `gpu-driver.*`, `w10-code43-check.ps1` removed (kept: `venv`, `py`, `audit`, `authorized_keys`, `pytorch-offline-bench.py` which `setup.sh verify` runs; sshd and the admin account) | L2 | `l2.cleanup_staging = yes` | same script; skipped while the NVIDIA driver is not installed yet |
@@ -50,9 +54,20 @@ The PVE host itself stays stock (no host package, kernel, modprobe or `storage.c
 * **Stale registry `Enum` keys that are not device instances of the three classes above** (e.g. old volume entries,
   QEMU/ICH9 devices that are still present) stay; present devices cannot be removed.
 * **CD-ROM name**: with the base patch alone the drive is `ASUS ASUS DVD-ROM` (not `QEMU DVD-ROM`); the realistic model needs optional patch 0003 (default on, built in L1). A QEMU built without it keeps `ASUS ASUS DVD-ROM` (the audit row is INFO then). Stale CD entries of earlier identities are removed by the stale-device cleanup.
-* PCI device list in general (Q35/ICH9 bridges, virtio/AHCI/e1000e controllers, USB tablet), timing behaviour (TSC,
-  RDTSCP/latency measurements), the `QEMU` / `Bochs` strings in the DSDT/SSDT that Windows does not enumerate, and a
-  hypervisor seen by anything that runs on the PVE host.
+* **PCI device list** (audited in the L2, 2026-10-10): what remains is the Intel Q35/ICH9 set (host bridge 29C0, LPC 2918, AHCI 2922, SMBus 2930, UHCI 2934-2936, EHCI 293A, e1000e 10D3)
+  on a machine that claims an AMD AM5 board, the root port `rpg` as `8086:000C` (QEMU's "PCIe root port" ID, vendor rewritten by the base patch; subsystem `0000:8086`) and, as ICH9 revision/class
+  values, whatever QEMU emulates. Windows' names for these ("Intel(R) ICH9 Family USB ...", "Standard SATA AHCI Controller", "LPC Controller") also occur on real PCs; no `1AF4`/`1B36`/`QEMU`
+  string remains, and the subsystem IDs are ASUS (see the table). Not changed: changing the device/vendor ID of the chipset functions would change what drivers bind to, and changing the ID
+  of `rpg` (the GPU's root port) would make Windows re-enumerate the GPU under a new parent: deliberately left alone on the passthrough path.
+* **ACPI strings** (tables dumped in the L2 with `GetSystemFirmwareTable`, before and after patch 0005): FACP/APIC/HPET/MCFG/BGRT/XSDT/DSDT carry OEM `ALASKA` / `A M I` / rev `0x1072009`, ASL creator `PTL `;
+  no `QEMU`, `BOCHS`, `BXPC`, `SeaBIOS`, `EDK II` string in any table (no SSDT is generated). The only QEMU-specific device in the AML that Windows enumerated was `FWCF` (`ASUS0002`, already renamed
+  from `QEMU0002` by the base patch, with problem code 28): patch 0005 drops it. Still in the DSDT and left alone, because they are AML structures Windows binds drivers to or
+  the root bus layout depends on: the `PNP0A08` PCI root bridge, `PNP0A06` "Extended IO Bus" resource devices (`CPU_HOTPLUG_RESOURCES`, `GPE0_RESOURCES`, `PCI_HOTPLUG_RESOURCES`), `ACPI0010`/`ACPI0006`,
+  `PNP0C01`, and the field/method names (`CPEN`, `PCIU`, ...) which no Windows API exposes by name.
+* **Timing (TSC, RDTSCP / latency measurements)** was not implemented (wave 2, item 6): under nested KVM (L0 PVE -> L1 -> L2) the guest's TSC is a virtualised/offset TSC and instruction timing includes two
+  hypervisors' exits. Hiding that means trapping RDTSC/RDTSCP (`TSC exiting`) and faking a monotonic cost for CPUID/exits, which (a) costs performance on every timestamp read (Windows and CUDA read it constantly),
+  (b) risks clock drift and watchdog/driver timeouts (the NVIDIA driver and Windows' timekeeping use it), and (c) cannot be made exact in software anyway; there is no low-risk setting, so nothing is changed and
+  the CPUID hypervisor bits stay the only hiding done at the CPU level. A hypervisor seen by anything that runs on the PVE host stays visible as well.
 
 ## GPU PCIe link (what the guest sees, 2026-10-10 findings)
 

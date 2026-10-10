@@ -1,7 +1,7 @@
 # Optional QEMU patches (WAET, ACPI OEM identity)
 
 Lab/dev software-compatibility aid: some software reads the ACPI tables and the registry values Windows derives
-from them. Two small, **optional** patches on top of the qemu-anti-detection patch (`qemu-10.2.2.patch`) are
+from them. Five small, **optional** patches on top of the qemu-anti-detection patch (`qemu-10.2.2.patch`) are
 carried in `patches/optional/qemu-10.2.2/`. They are **off by default in `qemu-ad-pve.sh`** (without `QAD_OPTIONAL_PATCHES` the build,
 the build stamp and the binary are exactly what they were before) but **on by default in `setup.sh`** (built inside L1, see below).
 
@@ -11,7 +11,10 @@ the build stamp and the binary are exactly what they were before) but **on by de
 | `0002-acpi-oem-id-table-id-revision` | The base patch hardcodes OEM ID `INTEL `, OEM table ID `PC8086  ` and OEM revision `1` in `acpi_table_begin()`, so the stock machine properties `x-oem-id` / `x-oem-table-id` had no effect. This patch honours them again (their defaults are the same `INTEL `/`PC8086  `, so default behaviour is identical) and adds `x-oem-revision` (uint32, default 1; hex such as `0x1072009` works). |
 | `0003-atapi-inquiry-from-model` | `ide-cd` has settable `model=` / `ver=` (IDENTIFY PACKET and the INQUIRY revision), but the ATAPI INQUIRY vendor/product strings are hardcoded (`ASUS` / `ASUS DVD-ROM` in the base patch, QEMU / QEMU DVD-ROM upstream), and Windows names the drive from the INQUIRY: `ASUS ASUS DVD-ROM`. The patch derives them from `model=` (first word = vendor, rest = product; `model="ASUS DRW-24B1ST"` shows as `ASUS DRW-24B1ST`). Used by `l2.cdrom_model`. |
 
-The patches touch different files (0001/0002 `hw/i386/acpi-build.c`, 0003 `hw/ide/atapi.c`) and are independent.
+| `0004-pci-default-subsystem-id` | Devices that set no subsystem ID of their own (ICH9 LPC/AHCI/SMBus/UHCI/EHCI, the Q35 host bridge) get QEMU's `pci_default_sub_vendor_id:pci_default_sub_device_id`, which the base patch sets to `8086:8086` (Windows: `SUBSYS_80868086`). The patch adds `pci_set_default_subsystem()` and two properties on `q35-pcihost`, `x-pci-sub-vendor-id` / `x-pci-sub-device-id` (default 0 = unchanged), used as `-global q35-pcihost.x-pci-sub-vendor-id=0x1043 -global q35-pcihost.x-pci-sub-device-id=0x8877` (`l2.pci_subsystem`). Devices with their own props (e1000e: stock `subsys_ven`/`subsys`, set by `l2.nic_subsystem`, no patch needed) are not affected. |
+| `0005-acpi-omit-fwcfg-device` | QEMU adds an ACPI device `FWCF` (`_HID` is `ASUS0002` after the base patch, `QEMU0002` upstream) to the DSDT for the fw_cfg interface. Windows has no driver for it: a hidden present device with problem code 28 (`ACPI\ASUS0002`) shows up in `Get-PnpDevice`. The patch stops adding it (the DSDT shrinks by 60 bytes). OVMF reaches fw_cfg through its I/O ports, not ACPI; only a Linux guest's `qemu_fw_cfg` sysfs driver would miss it. |
+
+The patches touch different files (0001/0002/0005 `hw/i386/acpi-build.c`, 0003 `hw/ide/atapi.c`, 0004 `hw/pci/pci.c` + `hw/pci-host/q35.c`) and are independent; 0004 only has an effect with the `-global` properties.
 
 ## Build
 
@@ -87,3 +90,20 @@ Built inside L1 with `QAD_OPTIONAL_PATCHES=0001-...,0002-...,0003-... PREFIX=/op
 GPU Code 0, driver 576.88, `setup.sh verify` PASS, torch fp32 34.55 / fp16 101.22 TFLOP/s. The old CD instance became a ghost and was
 removed by the stale-device cleanup (`qad-l1.sh ghosts`, no code change needed). The audit reads the patch set from the QEMU that the env file's
 `QB` points to (it used to look only at `/opt/qemu-ad-optpatch`), so a build at another path is judged correctly.
+
+## Patches 0004 and 0005 live test (2026-10-10, running VM 9320, no reinstall)
+
+Built like 0003 above (`/opt/qemu-ad-w3` = 0001-0004, `/opt/qemu-ad-w4` = 0001-0005, each in a fresh source tree in L1, `nice`, about 5 minutes), switched through `QB=` in
+`/etc/qemu-ad-l2.env` with `systemctl restart w10-l2`; backups in `L1:/root/backup-wave2/<step>`. One change at a time, each with verify PASS (GPU Code 0, driver 576.88), torch fp32/fp16 TFLOP/s
+and a pinned 1 GiB host<->device copy:
+
+| step | change | Windows before -> after | torch fp32 / fp16 | copy H2D / D2H |
+|---|---|---|---|---|
+| C1 | `subsys_ven=0x1043,subsys=0x8369` on e1000e (stock props, w2 binary) | `SUBSYS_00008086` -> `SUBSYS_83691043` | 34.59 / 100.95 | 6.72 / 6.59 GB/s |
+| C2 | patch 0004 + `-global q35-pcihost.x-pci-sub-*=0x1043 / 0x8877` (w3 binary) | ICH9 LPC, AHCI, SMBus, 3x UHCI, EHCI, host bridge `SUBSYS_80868086` -> `SUBSYS_88771043` | 34.64 / 100.90 | 6.72 / 6.59 GB/s |
+| C3 | no `usb-tablet` when the VGA is off | `USB\VID_0627&PID_0001` gone | 34.63 / 100.98 | 6.72 / 6.59 GB/s |
+| D | patch 0005 (w4 binary) | `ACPI\ASUS0002` (Code 28) gone, DSDT 9044 -> 8984 bytes | 34.43 / 100.97 | 6.72 / 6.59 GB/s |
+
+Changing a device's subsystem ID makes Windows create new device instances (the boot AHCI controller included: it booted normally on the generic inbox `storahci`); the old instances are
+non-present ghosts and are removed by the stale-device cleanup (`l2.cleanup_ghosts`, filter extended to old-subsystem Intel devices, the QEMU tablet and `ACPI\ASUS0002`; keys exported first).
+Revert for any step: restore `/etc/qemu-ad-l2.env` (and `/root/w10/start-l2.sh`) from the backup directory and restart `w10-l2`.

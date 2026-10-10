@@ -135,6 +135,7 @@ report a plausible desktop (answers-file keys under `[l2]`, all optional):
 | `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
 | `vga` | `std` | install-time VGA (QEMU PCI 1234:1111, watch the install over VNC); `none` removes it from the start |
 | `vga_after_verify` | `none` | the `l2_finalize` step switches the VGA off after the first successful verify (one L2 restart, re-verify, automatic revert on failure); `keep` leaves it |
+| `edid_monitor` | `none` | experimental registry EDID override (`asus-vg248qe`, `dell-s2421h`); no effect without an attached display (see docs/bare-metal-appearance.md), use an EDID emulator dongle |
 | `cleanup_ghosts` | `yes` | same step removes stale (not present) CD-ROM / `ASUS HARDDISK` / Standard VGA device instance keys (exported to `/root/w10/ghost-backup/` in L1 first) |
 | `cdrom_model` / `cdrom_firmware` | `ASUS DRW-24B1ST` / `1.00` | the optical drive Windows sees (empty model = patched QEMU default `ASUS ASUS DVD-ROM`); needs optional patch 0003 |
 | `detach_stage_iso` | `yes` | after the first successful verify the staging ISO is ejected and stays detached across restarts (the file stays in L1) |

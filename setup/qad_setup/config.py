@@ -156,6 +156,11 @@ SCHEMA: List[Key] = [
         "none = after the first successful verify switch the emulated VGA off (VGA=none in /etc/qemu-ad-l2.env, L2 restart, "
         "re-verify, automatic revert when the GPU stops working or the desktop is gone); keep = leave l2.vga as it is "
         "(the install keeps showing the Standard VGA adapter)", "choice", ("none", "keep")),
+    Key("l2", "edid_monitor", "none",
+        "EXPERIMENTAL registry EDID override for the L2 monitor node (asus-vg248qe | dell-s2421h | none). Live result on the "
+        "lab host: no effect without an attached display (Windows creates no monitor node; only placeholder "
+        "DISPLAY\\Default_Monitor entries exist), so the default is none; the real fix is an HDMI/DP EDID emulator dongle "
+        "(docs/bare-metal-appearance.md)", "choice", ("none", "asus-vg248qe", "dell-s2421h")),
     Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
     Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
         minimum=10),

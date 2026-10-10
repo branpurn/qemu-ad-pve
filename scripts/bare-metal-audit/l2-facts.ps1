@@ -19,6 +19,9 @@ P 'systeminfo.hypervisor_lines' ((systeminfo | Select-String -Pattern 'hyperviso
 # install residue (l2.cleanup_unattend / l2.cleanup_staging)
 P 'residue.unattend' ((@('C:\unattend.xml', 'C:\autounattend.xml', 'C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\actionqueue', 'C:\Windows\System32\Sysprep\unattend.xml') | Where-Object { Test-Path -LiteralPath $_ }) -join ',')
 P 'residue.staging' ((@('nvidia', 'python', 'openssh', 'firstlogon.ps1', 'firstlogon.log', 'firstlogon.done', 'gpu-driver.ps1', 'gpu-driver.log') | Where-Object { Test-Path -LiteralPath (Join-Path 'C:\qad' $_) }) -join ',')
+$mon = @(Get-PnpDevice -Class Monitor -PresentOnly -ErrorAction SilentlyContinue)
+P 'monitor.pnp' (($mon | ForEach-Object { $_.FriendlyName }) -join ',')
+P 'monitor.cim' ((Get-CimInstance Win32_DesktopMonitor | ForEach-Object { $_.Name }) -join ',')
 # stale (not present) device instances of earlier VM identities (same filter as setup/l1/windows/ghosts.ps1)
 $present = @((Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue).InstanceId)
 $ghost = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {

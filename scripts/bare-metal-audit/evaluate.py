@@ -205,6 +205,13 @@ def evaluate(env, facts):
             else:
                 r.add("INFO", label, facts[key] or "none", "(l2.cleanup_* = no)")
 
+    if "monitor.cim" in facts:
+        mons = facts.get("monitor.pnp", "") or facts.get("monitor.cim", "") or "none"
+        generic = not facts.get("monitor.pnp") or "Generic" in mons or "Default" in mons
+        r.add("INFO", "L2 monitor (EDID)", mons,
+              "generic: no EDID without an attached display; an HDMI/DP EDID emulator dongle is the only working fix (docs/bare-metal-appearance.md)"
+              if generic else "")
+
     if "ghost.count" in facts:
         if env.get("QAD_L2_CLEAN_GHOSTS", "1") == "1":
             r.check("Stale device instances (old CD / ASUS HARDDISK / Standard VGA)", facts["ghost.count"] == "0",

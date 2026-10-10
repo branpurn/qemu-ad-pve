@@ -42,7 +42,7 @@ def good_facts(env):
         "nic.0.mac": env["QAD_L2_MAC"].upper().replace(":", "-"),
         "video.0.name": "NVIDIA GeForce RTX 4080", "video.0.code": "0", "systeminfo.hypervisor_lines": "0",
         "cdrom.0.name": env["QAD_L2_CDROM_MODEL"], "cdrom.0.media": "False",
-        "residue.unattend": "", "residue.staging": "", "ghost.count": "0", "ghost.ids": "", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
+        "residue.unattend": "", "residue.staging": "", "ghost.count": "0", "ghost.ids": "", "monitor.pnp": "", "monitor.cim": "Default Monitor", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
         "acpi.tables": "MCFG,FACP,APIC,HPET,BGRT",
         "reg.SystemBiosVersion": "ALASKA - 1072009 ; 1654 ; American Megatrends International, LLC. - 5001B",
     }
@@ -119,6 +119,19 @@ def test_vga_and_ghost_opt_outs_are_info():
     r = ev.evaluate(env, f)
     assert not r.failed
     assert [x[0] for x in r.rows if "Stale" in x[1] or "display adapters" in x[1]] == ["INFO", "INFO"]
+
+
+def test_monitor_is_info_only_and_edid_profiles_are_valid_edids():
+    env = default_env()
+    r = ev.evaluate(env, good_facts(env))
+    assert [x[0] for x in r.rows if "monitor" in x[1]] == ["INFO"]
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "setup", "l1"))
+    import edid
+    for name in edid.PROFILES:
+        b = edid.build(name)
+        assert len(b) == 128 and sum(b) % 256 == 0 and b[:8] == bytes.fromhex("00ffffffffffff00")
+        assert edid.PROFILES[name][6].encode() in b
 
 
 def test_residue_opt_out_is_info():

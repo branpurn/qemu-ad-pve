@@ -133,7 +133,9 @@ report a plausible desktop (answers-file keys under `[l2]`, all optional):
 | `smbios_chassis` | `desktop` | `desktop`: the type 3 (chassis) is a raw structure with chassis type 3 (Desktop) and ASUSTeK strings, written to `/root/w10/smbios-type3.bin` in L1 and passed as `-smbios file=` (QEMU's own type 3 is chassis type 1 "Other" / "Default string" and `-smbios type=3` cannot change the type). `none` keeps the `type=3` fields. Needs `smbios = asus-am5` |
 | `mac_oui` | `a4:bf:01` | an Intel OUI instead of QEMU's `52:54:00` |
 | `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
-| `vga` | `std` | `none` removes the emulated VGA (QEMU PCI 1234:1111); set it after the install, when VNC is no longer needed |
+| `vga` | `std` | install-time VGA (QEMU PCI 1234:1111, watch the install over VNC); `none` removes it from the start |
+| `vga_after_verify` | `none` | the `l2_finalize` step switches the VGA off after the first successful verify (one L2 restart, re-verify, automatic revert on failure); `keep` leaves it |
+| `cleanup_ghosts` | `yes` | same step removes stale (not present) CD-ROM / `ASUS HARDDISK` / Standard VGA device instance keys (exported to `/root/w10/ghost-backup/` in L1 first) |
 | `cdrom_model` / `cdrom_firmware` | `ASUS DRW-24B1ST` / `1.00` | the optical drive Windows sees (empty model = patched QEMU default `ASUS ASUS DVD-ROM`); needs optional patch 0003 |
 | `detach_stage_iso` | `yes` | after the first successful verify the staging ISO is ejected and stays detached across restarts (the file stays in L1) |
 | `cleanup_unattend` | `yes` | after the first successful verify the `l2_finalize` step deletes `unattend.xml`, `UnattendGC`, `actionqueue` and the Setup/Panther logs in the L2 |

@@ -42,7 +42,7 @@ def good_facts(env):
         "nic.0.mac": env["QAD_L2_MAC"].upper().replace(":", "-"),
         "video.0.name": "NVIDIA GeForce RTX 4080", "video.0.code": "0", "systeminfo.hypervisor_lines": "0",
         "cdrom.0.name": env["QAD_L2_CDROM_MODEL"], "cdrom.0.media": "False",
-        "residue.unattend": "", "residue.staging": "", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
+        "residue.unattend": "", "residue.staging": "", "ghost.count": "0", "ghost.ids": "", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
         "acpi.tables": "MCFG,FACP,APIC,HPET,BGRT",
         "reg.SystemBiosVersion": "ALASKA - 1072009 ; 1654 ; American Megatrends International, LLC. - 5001B",
     }
@@ -83,6 +83,8 @@ def test_each_regression_is_a_fail():
         ("video.0.code", "43", "GPU problem code"),
         ("cdrom.0.name", "ASUS ASUS DVD-ROM", "optical drive model"),
         ("cdrom.0.media", "True", "staging ISO detached"),
+        ("ghost.count", "2", "Stale device instances"),
+        ("video.1.name", "Microsoft Basic Display Adapter", "display adapters"),
         ("residue.unattend", "C:\\Windows\\Panther\\unattend.xml", "Answer-file residue"),
         ("residue.staging", "nvidia,firstlogon.ps1", "Staging residue"),
     ]:
@@ -108,6 +110,15 @@ def test_cdrom_model_is_info_when_qemu_lacks_patch_0003():
     r = ev.evaluate(env, f)
     assert not r.failed
     assert any(x[0] == "INFO" and "optical drive model" in x[1] for x in r.rows)
+
+
+def test_vga_and_ghost_opt_outs_are_info():
+    env = default_env(l2__cleanup_ghosts="no", l2__vga_after_verify="keep")
+    f = good_facts(env)
+    f.update({"ghost.count": "1", "ghost.ids": "SCSI\\CDROM&VEN_ASUS", "video.1.name": "Microsoft Basic Display Adapter", "video.1.code": "0"})
+    r = ev.evaluate(env, f)
+    assert not r.failed
+    assert [x[0] for x in r.rows if "Stale" in x[1] or "display adapters" in x[1]] == ["INFO", "INFO"]
 
 
 def test_residue_opt_out_is_info():

@@ -148,6 +148,14 @@ SCHEMA: List[Key] = [
         "After the first successful verify, delete the staged installers and one-shot first-boot scripts/logs from "
         "C:\\qad in the L2 (nvidia, python, openssh, firstlogon.*, gpu-driver.*). The venv, py, audit dir, sshd and the "
         "admin account stay. no = keep", "bool"),
+    Key("l2", "cleanup_ghosts", "yes",
+        "After the first successful verify, remove stale (not present) device instance keys of earlier VM identities from the "
+        "L2 registry (old CD-ROM instances, the install-time 'ASUS HARDDISK', the emulated Standard VGA after vga_after_verify = "
+        "none); the keys are exported to /root/w10/ghost-backup in L1 first. no = keep", "bool"),
+    Key("l2", "vga_after_verify", "none",
+        "none = after the first successful verify switch the emulated VGA off (VGA=none in /etc/qemu-ad-l2.env, L2 restart, "
+        "re-verify, automatic revert when the GPU stops working or the desktop is gone); keep = leave l2.vga as it is "
+        "(the install keeps showing the Standard VGA adapter)", "choice", ("none", "keep")),
     Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
     Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
         minimum=10),

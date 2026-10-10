@@ -205,6 +205,22 @@ def evaluate(env, facts):
             else:
                 r.add("INFO", label, facts[key] or "none", "(l2.cleanup_* = no)")
 
+    if "ghost.count" in facts:
+        if env.get("QAD_L2_CLEAN_GHOSTS", "1") == "1":
+            r.check("Stale device instances (old CD / ASUS HARDDISK / Standard VGA)", facts["ghost.count"] == "0",
+                    facts["ghost.ids"] if facts["ghost.count"] != "0" else "none", "none")
+        else:
+            r.add("INFO", "Stale device instances", facts["ghost.ids"] or "none", "(l2.cleanup_ghosts = no)")
+    vnames = indexed(facts, "video", "name")
+    if vnames:
+        vga_off = env.get("QAD_L2_VGA") == "none" or env.get("QAD_L2_VGA_AFTER", "none") == "none"
+        others = [n for n in vnames if "NVIDIA" not in n]
+        if vga_off:
+            r.check("L2 display adapters (RTX only, no emulated VGA)", not others, ", ".join(vnames), "NVIDIA only")
+            r.add("INFO", "L2 VNC console", "no image once the emulated VGA is off (normal boots have no VNC; install used vga std)", "")
+        else:
+            r.add("INFO", "L2 display adapters", ", ".join(vnames), "(l2.vga_after_verify = keep)")
+
     gpu = [(n, c) for n, c in zip(indexed(facts, "video", "name"), indexed(facts, "video", "code")) if "NVIDIA" in n]
     r.check("L2 GPU problem code", bool(gpu) and all(c == "0" for _, c in gpu), ", ".join(f"{n}: {c}" for n, c in gpu) or "no NVIDIA device", "0")
     return r

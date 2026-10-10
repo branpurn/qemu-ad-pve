@@ -678,12 +678,13 @@ def s_l2_finalize(c: Ctx) -> str:
     """Post-verify cleanup in the L2 (qad-l1.sh finalize: hygiene, ... then verify again)."""
     if c.cfg["l2.source"] == "none":
         raise _Skip("l2.source=none")
-    if not (c.cfg.bool("l2.cleanup_unattend") or c.cfg.bool("l2.cleanup_staging")):
+    if not (c.cfg.bool("l2.cleanup_unattend") or c.cfg.bool("l2.cleanup_staging") or c.cfg.bool("l2.cleanup_ghosts")
+            or c.cfg.bool("l2.detach_stage_iso") or c.cfg["l2.vga_after_verify"] == "none" or c.cfg["l2.cdrom_model"]):
         raise _Skip("all post-install cleanups opted out")
     c.l1("finalize", timeout=1500)  # raises CommandError when a cleanup or the re-verify fails
     if c.dry:
         return "dry"
-    return "residue removed (unattend/Panther, staging), verify PASS"
+    return "post-install cleanups applied (residue, stage ISO, stale devices, vga), verify PASS"
 
 
 class _Skip(Exception):

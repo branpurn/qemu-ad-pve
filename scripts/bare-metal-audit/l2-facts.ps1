@@ -17,5 +17,15 @@ $i = 0; Get-CimInstance Win32_VideoController | ForEach-Object { P "video.$i.nam
 $i = 0; Get-CimInstance Win32_CDROMDrive | ForEach-Object { P "cdrom.$i.name" $_.Name; P "cdrom.$i.media" $_.MediaLoaded; $i++ }
 P 'systeminfo.hypervisor_lines' ((systeminfo | Select-String -Pattern 'hypervisor' | Measure-Object).Count)
 # install residue (l2.cleanup_unattend / l2.cleanup_staging)
-P 'residue.unattend' ((@('C:\unattend.xml', 'C:\autounattend.xml', 'C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\UnattendGC', 'C:\Windows\Panther\actionqueue', 'C:\Windows\System32\Sysprep\unattend.xml') | Where-Object { Test-Path -LiteralPath $_ }) -join ',')
+P 'residue.unattend' ((@('C:\unattend.xml', 'C:\autounattend.xml', 'C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\actionqueue', 'C:\Windows\System32\Sysprep\unattend.xml') | Where-Object { Test-Path -LiteralPath $_ }) -join ',')
 P 'residue.staging' ((@('nvidia', 'python', 'openssh', 'firstlogon.ps1', 'firstlogon.log', 'firstlogon.done', 'gpu-driver.ps1', 'gpu-driver.log') | Where-Object { Test-Path -LiteralPath (Join-Path 'C:\qad' $_) }) -join ',')
+# stale (not present) device instances of earlier VM identities (same filter as setup/l1/windows/ghosts.ps1)
+$present = @((Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue).InstanceId)
+$ghost = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+  $id = $_.InstanceId
+  ($present -notcontains $id) -and ($id -notmatch 'VEN_10DE|SAMSUNG|^ROOT\\|^STORAGE\\') -and (
+    ($_.Class -eq 'CDROM' -and $id -match '^(SCSI|IDE)\\CDROM') -or
+    ($_.Class -eq 'DiskDrive' -and $id -match 'PROD_HARDDISK|QEMU_HARDDISK') -or
+    ($_.Class -eq 'Display' -and $id -match '^PCI\\VEN_1234&DEV_1111')) })
+P 'ghost.count' $ghost.Count
+P 'ghost.ids' (($ghost | ForEach-Object { $_.InstanceId }) -join ',')

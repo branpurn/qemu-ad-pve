@@ -249,7 +249,9 @@ step_scripts() {
   install -m 644 "$REPO/tests/w10-code43-check.ps1" "$W/"
   [ -f /root/l2/OVMF_CODE.fd ] || install -m 644 /usr/share/OVMF/OVMF_CODE_4M.fd /root/l2/OVMF_CODE.fd
   [ -f "$W/l2_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C "qad-l1-to-l2" -f "$W/l2_ed25519"
-  local extra="" cdrom=""
+  local extra="" cdrom="" vga=${QAD_L2_VGA:-std}
+  # l2.vga_after_verify = none: the first-verify switch is remembered here so a later `scripts` rewrite keeps it
+  [ ! -f "$W/vga.switched" ] || vga=none
   if [ -n "${QAD_L2_CDROM_MODEL:-}" ]; then
     # start-l2.sh builds the drive (realistic model/firmware); STAGE_ISO inserts the staging CD until it is detached
     cdrom="CDROM_MODEL=\"$QAD_L2_CDROM_MODEL\"
@@ -275,7 +277,7 @@ L2_SMP=$QAD_L2_SMP
 L2_MEM=$QAD_L2_MEM
 L2_MAC=$QAD_L2_MAC
 CPU=$QAD_L2_CPU
-VGA=${QAD_L2_VGA:-std}
+VGA=$vga
 DISK_MODEL="${QAD_L2_DISK_MODEL:-}"
 DISK_SERIAL="${QAD_L2_DISK_SERIAL:-}"
 DISK_FW="${QAD_L2_DISK_FW:-}"
@@ -436,7 +438,7 @@ step_stage() {
     mv "$W/autounattend.iso.tmp" "$W/autounattend.iso"
     rm -rf "$u"
   fi
-  rm -f "$W/stage.detached"  # a new staging ISO is attached again until the next first-verify detach
+  rm -f "$W/stage.detached" "$W/vga.switched"  # a new staging ISO is attached again until the next first-verify detach
   step_scripts >/dev/null  # refresh EXTRA in /etc/qemu-ad-l2.env so normal boots see stage.iso
   say "stage.iso $(du -h "$W/stage.iso" | cut -f1)$([ -f "$W/autounattend.iso" ] && echo ', autounattend.iso')"
 }
@@ -630,6 +632,41 @@ step_detach_stage() {
   echo "STAGE_ISO=detached (ISO file kept: $W/stage.iso)"
 }
 
+# Copy a file/dir from the L2 into a local directory (same host-key policy as l2_ssh).
+l2_scp_from() { # l2_scp_from REMOTE_PATH LOCAL_DIR
+  local strict
+  strict=$(l2_strict)
+  scp -r -i "$W/l2_ed25519" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking="$strict" \
+    -o UserKnownHostsFile="$L2_KNOWN" "$QAD_ADMIN_USER@$QAD_L2_IP:$1" "$2"
+}
+
+# l2.cleanup_ghosts: remove stale device instance keys (ghosts.ps1 as SYSTEM, one-shot task). Backups: $W/ghost-backup/<time>/
+step_ghosts() {
+  if [ "${QAD_L2_CLEAN_GHOSTS:-1}" != 1 ]; then echo "GHOSTS=off (l2.cleanup_ghosts = no)"; return 0; fi
+  local d out
+  d="$W/ghost-backup/$(date +%Y%m%d-%H%M%S)"
+  l2_ssh 'exit 0' >/dev/null 2>&1 || die "L2 not reachable over SSH; ghost cleanup needs it"
+  l2_scp "$REPO/setup/l1/windows/ghosts.ps1" 'C:/Windows/Temp/qad-ghosts.ps1' || die "scp ghosts.ps1 failed"
+  l2_scp "$REPO/setup/l1/windows/ghosts-run.ps1" 'C:/Windows/Temp/qad-ghosts-run.ps1' || die "scp ghosts-run.ps1 failed"
+  out=$(l2_ssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\qad-ghosts-run.ps1 -Apply 1' | tr -d '\r') || true
+  printf '%s\n' "$out"
+  install -d -m 700 "$W/ghost-backup" "$d"
+  l2_scp_from 'C:/Windows/Temp/qad-ghost-backup/.' "$d/" >/dev/null 2>&1 || true
+  chmod -R go-rwx "$W/ghost-backup"
+  l2_ssh 'powershell -NoProfile -Command "Remove-Item -Recurse -Force C:\Windows\Temp\qad-ghost-backup,C:\Windows\Temp\qad-ghosts*.ps1,C:\Windows\Temp\qad-ghosts.log -ErrorAction SilentlyContinue"' >/dev/null 2>&1 || true
+  case "$out" in *GHOST_DONE*) ;; *) die "ghost cleanup did not finish" ;; esac
+  case "$out" in *"failed=0"*) ;; *) echo "GHOSTS: some keys could not be removed (see above)" >&2 ;; esac
+}
+
+# After l2.vga_after_verify = none: the RTX is the only display adapter and the autologon desktop runs.
+step_vga_check() {
+  l2_scp "$REPO/setup/l1/windows/vga-check.ps1" 'C:/Windows/Temp/qad-vga-check.ps1' || return 1
+  local rc=0
+  l2_ssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\qad-vga-check.ps1' | tr -d '\r' || rc=${PIPESTATUS[0]}
+  l2_ssh 'del /f /q C:\Windows\Temp\qad-vga-check.ps1' >/dev/null 2>&1 || true
+  return "$rc"
+}
+
 l2_cmdline() { tr '\0' ' ' <"/proc/$(cat "$W/w10.pid" 2>/dev/null || echo 0)/cmdline" 2>/dev/null || true; }
 
 # Restart the L2 (ACPI power-down via w10-l2.service, then start) and wait until SSH answers again.
@@ -644,17 +681,54 @@ l2_restart() {
   return 1
 }
 
-# One-shot, after the first successful verify: every enabled post-install cleanup, then verify again.
+# After an L2 restart with a changed PCI topology (emulated VGA gone) Windows needs a while to bind the driver to the
+# GPU's new device instance (Code 18 for ~1 min); poll verify instead of failing on the first answer.
+step_verify_wait() {
+  local i out rc=0
+  for i in $(seq 1 14); do
+    rc=0; out=$(step_verify 2>&1) || rc=$?
+    if [ "$rc" = 0 ]; then printf '%s\n' "$out"; return 0; fi
+    sleep 15
+  done
+  printf '%s\n' "$out"
+  return 1
+}
+
+# One-shot, after the first successful verify: every enabled post-install change, then verify again.
+# l2.vga_after_verify = none switches the emulated VGA off; when the re-verify or the display check fails afterwards,
+# the VGA is switched back on (restart) and the step fails.
 step_finalize() {
-  local restart=0 cl
+  local restart=0 cl vga_now=0 rc=0
+  step_verify >/dev/null || die "verify does not pass yet; fix it first (setup.sh verify), then re-run"
   step_hygiene
   step_detach_stage
+  if [ "${QAD_L2_VGA_AFTER:-none}" = none ] && [ "${QAD_L2_VGA:-std}" != none ] && [ ! -f "$W/vga.switched" ]; then
+    cp -a /etc/qemu-ad-l2.env "$W/l2.env.pre-vga"
+    touch "$W/vga.switched"; vga_now=1
+    step_scripts >/dev/null  # VGA=none in /etc/qemu-ad-l2.env
+    echo "VGA=none (emulated VGA 1234:1111 switched off; revert: rm $W/vga.switched; qad-l1.sh scripts; restart $L2_UNIT)"
+  fi
   cl=$(l2_cmdline)
-  # the running QEMU still has the old optical drive (model and/or inserted staging ISO): apply at once
+  # the running QEMU still has the old optical drive (model and/or inserted staging ISO) or the emulated VGA: apply at once
   if [ -n "${QAD_L2_CDROM_MODEL:-}" ] && [ "${cl#*"model=$QAD_L2_CDROM_MODEL"}" = "$cl" ]; then restart=1; fi
   if [ ! -f "$W/stage.iso" ] || [ -f "$W/stage.detached" ]; then [ "${cl#*stage.iso}" = "$cl" ] || restart=1; fi
-  if [ "$restart" = 1 ]; then l2_restart || die "L2 did not come back after the restart (journalctl -u $L2_UNIT; restore /etc/qemu-ad-l2.env backup)"; fi
-  step_verify
+  if [ -f "$W/vga.switched" ] && [ "${cl#*"-vga std"}" != "$cl" ]; then restart=1; fi
+  if [ "$restart" = 1 ]; then
+    l2_restart || rc=1
+    # Windows recreates small Panther\UnattendGC logs at every boot: clear them again after the restart
+    [ "$rc" != 0 ] || step_hygiene >/dev/null || true
+  fi
+  if [ "$rc" = 0 ]; then step_ghosts || rc=1; fi
+  if [ "$rc" = 0 ]; then step_verify_wait || rc=1; fi
+  if [ "$rc" = 0 ] && [ -f "$W/vga.switched" ]; then step_vga_check || rc=1; fi
+  if [ "$rc" != 0 ] && [ "$vga_now" = 1 ]; then
+    echo "FINALIZE: failed after switching the VGA off; reverting to VGA=std" >&2
+    rm -f "$W/vga.switched"
+    step_scripts >/dev/null
+    l2_restart || echo "FINALIZE: the L2 did not come back after the revert (journalctl -u $L2_UNIT; backup $W/l2.env.pre-vga)" >&2
+    step_verify_wait || true
+  fi
+  [ "$rc" = 0 ] || die "post-install finalize failed (see above)"
 }
 
 # Opt-in, read-only: does the machine look like ordinary hardware (see docs/bare-metal-appearance.md)?
@@ -697,6 +771,8 @@ case "$step" in
   verify) step_verify ;;
   hygiene) step_hygiene ;;
   detach-stage) step_detach_stage ;;
+  ghosts) step_ghosts ;;
+  vga-check) step_vga_check ;;
   finalize) step_finalize ;;
   audit) step_audit ;;
   status) step_status ;;

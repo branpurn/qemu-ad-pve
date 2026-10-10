@@ -92,6 +92,15 @@ def evaluate(env, facts):
         else:
             r.add("INFO", "L1 systemd-detect-virt", facts["l1.detect_virt"], "(l1.smbios/hide_hypervisor not default)")
         r.check("L1 /dev/kvm", facts.get("l1.kvm_dev") == "present", facts.get("l1.kvm_dev", "?"), "present")
+        spd, wid = env.get("QAD_L2_GPU_LINK_SPEED", ""), env.get("QAD_L2_GPU_LINK_WIDTH", "")
+        if "l1.rpg_link" in facts and (spd or wid):
+            want = (["x-speed=" + spd.replace(".", "_")] if spd else []) + (["x-width=" + wid] if wid else [])
+            have = facts["l1.rpg_link"].split(",")
+            r.check("L2 GPU root port link (x-speed/x-width)", all(w in have for w in want), facts["l1.rpg_link"] or "none", ",".join(want))
+        elif spd or wid:
+            r.add("INFO", "L2 GPU root port link", "not collected", "")
+        else:
+            r.add("INFO", "L2 GPU root port link", "QEMU default (Gen4 x32)", "(l2.gpu_link_speed/width empty)")
     else:
         r.add("SKIP", "L1 facts", "not collected", "")
 

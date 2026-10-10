@@ -11,4 +11,5 @@ qb=$(sed -n 's/^QB=//p' /etc/qemu-ad-l2.env 2>/dev/null | tail -1 | tr -d "\"'")
 qpre=${qb%/bin/*}
 [ -n "$qb" ] && [ -f "$qpre/.qemu-ad-configure-flags" ] || qpre=/opt/qemu-ad-optpatch
 echo "l1.qemu_optpatches=$(sed 's/.*# optional-patches=//p;d' "$qpre/.qemu-ad-configure-flags" 2>/dev/null)"
+echo "l1.rpg_link=$(tr '\0' ' ' </proc/"$(cat /root/w10/w10.pid 2>/dev/null)"/cmdline 2>/dev/null | grep -o 'pcie-root-port,id=rpg[^ ]*' | head -1)"
 echo "l1.kvm_dev=$([ -c /dev/kvm ] && echo present || echo missing)"

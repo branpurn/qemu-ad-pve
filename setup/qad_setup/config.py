@@ -116,6 +116,11 @@ SCHEMA: List[Key] = [
         "Model string of the L2 optical drive (ATAPI; first word = vendor in Windows). Used from the install on, so "
         "Windows never sees another CD identity. Empty = the patched QEMU default ('ASUS DVD-ROM', shown as 'ASUS ASUS DVD-ROM')"),
     Key("l2", "cdrom_firmware", "1.00", "Firmware revision of the L2 optical drive (needs l2.cdrom_model)"),
+    Key("l2", "gpu_link_speed", "16",
+        "Link speed (GT/s: 2.5 5 8 16 32 64) the L2's GPU root port ('rpg') advertises; QEMU's own default is 16. The GPU's own "
+        "link status in Windows (nvidia-smi) always follows the physical link; empty = QEMU default"),
+    Key("l2", "gpu_link_width", "16",
+        "Link width (1 2 4 8 12 16 32) the L2's GPU root port advertises; QEMU's own default is x32, a real CPU root port is x16; empty = QEMU default"),
     Key("l2", "detach_stage_iso", "yes",
         "After the first successful verify, eject the staging ISO from the L2 CD drive and keep it detached after restarts "
         "(the empty drive stays; the ISO file is kept in L1 for a reinstall). no = keep it attached"),
@@ -444,6 +449,10 @@ def cross_validate(cfg: Config) -> List[str]:
             bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
     if cfg["l2.cdrom_firmware"] and not cfg["l2.cdrom_model"]:
         bad.append("l2.cdrom_firmware needs l2.cdrom_model")
+    if cfg["l2.gpu_link_speed"] not in ("", "2.5", "5", "8", "16", "32", "64"):
+        bad.append("l2.gpu_link_speed must be empty or one of 2.5 5 8 16 32 64")
+    if cfg["l2.gpu_link_width"] not in ("", "1", "2", "4", "8", "12", "16", "32"):
+        bad.append("l2.gpu_link_width must be empty or one of 1 2 4 8 12 16 32")
     if cfg["l2.vga"] not in ("std", "none"):
         bad.append("l2.vga must be std or none")
     try:

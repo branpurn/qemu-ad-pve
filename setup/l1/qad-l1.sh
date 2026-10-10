@@ -301,6 +301,9 @@ L2_DHCP_END=$QAD_L2_DHCP_END
 EXTRA="$extra"
 CONF
   [ -z "$cdrom" ] || printf '%s\n' "$cdrom" >>/etc/qemu-ad-l2.env
+  # l2.gpu_link_speed / l2.gpu_link_width: link the GPU root port ("rpg") advertises (start-l2.sh GPU_LINK_*; empty = QEMU default)
+  [ -z "${QAD_L2_GPU_LINK_SPEED:-}" ] || printf 'GPU_LINK_SPEED=%s\n' "$QAD_L2_GPU_LINK_SPEED" >>/etc/qemu-ad-l2.env
+  [ -z "${QAD_L2_GPU_LINK_WIDTH:-}" ] || printf 'GPU_LINK_WIDTH=%s\n' "$QAD_L2_GPU_LINK_WIDTH" >>/etc/qemu-ad-l2.env
   # OPT-IN identity settings (all default off; without them the env file is exactly as before).
   # Revert: empty the l2.* keys, `setup.sh install --redo l1_scripts`, `systemctl restart w10-l2`
   # (or copy back the /etc/qemu-ad-l2.env backup), or just delete the lines below.

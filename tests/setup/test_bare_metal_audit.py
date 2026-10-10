@@ -31,7 +31,7 @@ def good_facts(env):
     s = ev.smbios_fields(default_env()["QAD_L2_SMBIOS"])
     f = {
         "l1.detect_virt": "none", "l1.cpuinfo_hypervisor_flag": "0", "l1.dmi.sys_vendor": "ASUS",
-        "l1.dmi.chassis_type": "3", "l1.dmi.bios_vendor": "American Megatrends Inc.", "l1.kvm_dev": "present", "l1.qemu_optpatches": "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model",
+        "l1.dmi.chassis_type": "3", "l1.dmi.bios_vendor": "American Megatrends Inc.", "l1.kvm_dev": "present", "l1.rpg_link": "pcie-root-port,id=rpg,chassis=11,slot=1,x-speed=16,x-width=16", "l1.qemu_optpatches": "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model",
         "cs.manufacturer": "ASUS", "cs.model": "System Product Name", "cs.hypervisor_present": "False",
         "bios.manufacturer": s[0]["vendor"], "bios.version": s[0]["version"], "bios.date": s[0]["date"],
         "board.manufacturer": s[2]["manufacturer"], "board.product": s[2]["product"],
@@ -110,6 +110,19 @@ def test_cdrom_model_is_info_when_qemu_lacks_patch_0003():
     r = ev.evaluate(env, f)
     assert not r.failed
     assert any(x[0] == "INFO" and "optical drive model" in x[1] for x in r.rows)
+
+
+def test_gpu_root_port_link_row():
+    env = default_env()
+    f = good_facts(env)
+    r = ev.evaluate(env, f)
+    assert not r.failed and any(x[0] == "PASS" and "root port link" in x[1] for x in r.rows)
+    f["l1.rpg_link"] = "pcie-root-port,id=rpg,chassis=11,slot=1"
+    r = ev.evaluate(env, f)
+    assert any(x[0] == "FAIL" and "root port link" in x[1] for x in r.rows)
+    env2 = default_env(l2__gpu_link_speed="", l2__gpu_link_width="")
+    r = ev.evaluate(env2, f)
+    assert not r.failed and any(x[0] == "INFO" and "root port link" in x[1] for x in r.rows)
 
 
 def test_vga_and_ghost_opt_outs_are_info():

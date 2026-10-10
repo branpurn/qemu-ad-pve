@@ -31,7 +31,7 @@ def good_facts(env):
     s = ev.smbios_fields(default_env()["QAD_L2_SMBIOS"])
     f = {
         "l1.detect_virt": "none", "l1.cpuinfo_hypervisor_flag": "0", "l1.dmi.sys_vendor": "ASUS",
-        "l1.dmi.chassis_type": "3", "l1.dmi.bios_vendor": "American Megatrends Inc.", "l1.kvm_dev": "present",
+        "l1.dmi.chassis_type": "3", "l1.dmi.bios_vendor": "American Megatrends Inc.", "l1.kvm_dev": "present", "l1.qemu_optpatches": "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model",
         "cs.manufacturer": "ASUS", "cs.model": "System Product Name", "cs.hypervisor_present": "False",
         "bios.manufacturer": s[0]["vendor"], "bios.version": s[0]["version"], "bios.date": s[0]["date"],
         "board.manufacturer": s[2]["manufacturer"], "board.product": s[2]["product"],
@@ -41,6 +41,7 @@ def good_facts(env):
         "disk.0.model": env["QAD_L2_DISK_MODEL"], "disk.0.firmware": env["QAD_L2_DISK_FW"],
         "nic.0.mac": env["QAD_L2_MAC"].upper().replace(":", "-"),
         "video.0.name": "NVIDIA GeForce RTX 4080", "video.0.code": "0", "systeminfo.hypervisor_lines": "0",
+        "cdrom.0.name": env["QAD_L2_CDROM_MODEL"], "cdrom.0.media": "False",
         "residue.unattend": "", "residue.staging": "", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
         "acpi.tables": "MCFG,FACP,APIC,HPET,BGRT",
         "reg.SystemBiosVersion": "ALASKA - 1072009 ; 1654 ; American Megatrends International, LLC. - 5001B",
@@ -80,6 +81,8 @@ def test_each_regression_is_a_fail():
         ("reg.SystemBiosVersion", "BOCHS - 1 ; 1654 ; EDK II", "SystemBiosVersion"),
         ("l1.detect_virt", "qemu", "systemd-detect-virt"),
         ("video.0.code", "43", "GPU problem code"),
+        ("cdrom.0.name", "ASUS ASUS DVD-ROM", "optical drive model"),
+        ("cdrom.0.media", "True", "staging ISO detached"),
         ("residue.unattend", "C:\\Windows\\Panther\\unattend.xml", "Answer-file residue"),
         ("residue.staging", "nvidia,firstlogon.ps1", "Staging residue"),
     ]:
@@ -96,6 +99,15 @@ def test_opt_outs_are_not_failures():
               "cs.model": "Standard PC", "l1.detect_virt": "qemu", "l1.dmi.sys_vendor": "QEMU"})
     r = ev.evaluate(env, f)
     assert not r.failed, [x for x in r.rows if x[0] == "FAIL"]
+
+
+def test_cdrom_model_is_info_when_qemu_lacks_patch_0003():
+    env = default_env()
+    f = good_facts(env)
+    f.update({"l1.qemu_optpatches": "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision", "cdrom.0.name": "ASUS ASUS DVD-ROM"})
+    r = ev.evaluate(env, f)
+    assert not r.failed
+    assert any(x[0] == "INFO" and "optical drive model" in x[1] for x in r.rows)
 
 
 def test_residue_opt_out_is_info():

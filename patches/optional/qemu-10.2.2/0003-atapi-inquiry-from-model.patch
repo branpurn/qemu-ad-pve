@@ -1,0 +1,30 @@
+--- a/hw/ide/atapi.c
++++ b/hw/ide/atapi.c
+@@ -798,8 +798,25 @@
+         buf[5] = 0;    /* reserved */
+         buf[6] = 0;    /* reserved */
+         buf[7] = 0;    /* reserved */
+-        padstr8(buf + 8, 8, "ASUS");
+-        padstr8(buf + 16, 16, "ASUS DVD-ROM");
++        /* qemu-ad-pve optional patch: INQUIRY vendor/product follow the drive model
++         * (-device ide-cd,model="VENDOR PRODUCT"; first word = vendor), like Windows shows them. */
++        {
++            const char *m = s->drive_model_str;
++            const char *sp = strchr(m, ' ');
++            char vendor[9] = "ASUS";
++            char product[17];
++
++            if (sp) {
++                size_t n = MIN((size_t)(sp - m), sizeof(vendor) - 1);
++
++                memcpy(vendor, m, n);
++                vendor[n] = '\0';
++                m = sp + 1;
++            }
++            pstrcpy(product, sizeof(product), m);
++            padstr8(buf + 8, 8, vendor);
++            padstr8(buf + 16, 16, product);
++        }
+         padstr8(buf + 32, 4, s->version);
+         idx = 36;
+     }

@@ -183,6 +183,7 @@ def test_l1_env_carries_l2_identity(tmp_path):
     assert vals["QAD_L2_MAC"].startswith("a4:bf:01:")
     assert vals["QAD_L2_DISK_MODEL"] == "Samsung SSD 980 PRO 1TB" and vals["QAD_L2_DISK_SERIAL"]
     assert vals["QAD_L2_SMBIOS"].count("|") == 5 and vals["QAD_L2_VGA"] == "std"
+    assert vals["QAD_L2_CDROM_MODEL"] == "ASUS DRW-24B1ST" and vals["QAD_L2_DETACH_STAGE"] == "1"
     assert vals["QAD_L2_CLEAN_UNATTEND"] == "1" and vals["QAD_L2_CLEAN_STAGING"] == "1"
 
 
@@ -248,7 +249,7 @@ def test_l1_env_optional_identity_defaults_on_and_opt_out(tmp_path):
                 out[k] = shlex.split(v)[0] if shlex.split(v) else ""
         return out
     d = vals({})
-    assert d["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"
+    assert d["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model"
     assert [d[k] for k in ("QAD_L2_OEM_ID", "QAD_L2_OEM_TABLE_ID", "QAD_L2_OEM_REVISION")] == ["ALASKA", "A M I", "0x1072009"]
     assert d["QAD_L2_OVMF_IDENTITY"] == "1" and d["QAD_L2_OVMF_BUILD"] == "1"
     n = vals({"l2.optional_patches": "none", "l2.ovmf_identity": "no"})

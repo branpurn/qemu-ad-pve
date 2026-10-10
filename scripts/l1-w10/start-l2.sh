@@ -115,6 +115,17 @@ MACHINE="q35,accel=kvm"
 [ -n "${OEM_REVISION:-}" ] && MACHINE="$MACHINE,x-oem-revision=$OEM_REVISION"
 OVMF_CODE=${OVMF_CODE:-/root/l2/OVMF_CODE.fd}
 OVMF_VARS=${OVMF_VARS:-/root/w10/VARS.fd}
+# Optical drive (CDROM_MODEL set): ide-cd on ide.2 with a realistic model/firmware (qemu's own default is the
+# patched build's "ASUS DVD-ROM"). STAGE_ISO set = staging CD inserted (install/first boot); unset = empty drive.
+CDARGS=()
+if [ -n "${CDROM_MODEL:-}" ]; then
+  if [ -n "${STAGE_ISO:-}" ] && [ -r "$STAGE_ISO" ]; then
+    CDARGS=(-drive "file=$STAGE_ISO,format=raw,if=none,id=stg,media=cdrom,readonly=on")
+  else
+    CDARGS=(-drive "if=none,id=stg,media=cdrom,readonly=on")
+  fi
+  CDARGS+=(-device "ide-cd,drive=stg,bus=ide.2,model=$CDROM_MODEL${CDROM_VER:+,ver=$CDROM_VER}")
+fi
 # Intentional split of EXTRA env into argv words
 # shellcheck disable=SC2206
 EXTRA=(${EXTRA:-})
@@ -132,4 +143,4 @@ exec "$QB" -name w10-l2-ad -machine "$MACHINE" -cpu "$CPU" -smp "$L2_SMP" -m "$L
   "${VGAARGS[@]}" "${SMB[@]}" -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
   -device pcie-root-port,id=rpg,chassis=11,slot=1 \
   "${GPUDEV[@]}" \
-  "${EXTRA[@]}" -pidfile /root/w10/w10.pid -daemonize
+  "${CDARGS[@]}" "${EXTRA[@]}" -pidfile /root/w10/w10.pid -daemonize

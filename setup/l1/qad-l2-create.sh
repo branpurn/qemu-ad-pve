@@ -50,6 +50,12 @@ find_win_cd() {
   return 1
 }
 
+NICOPTS=""
+if [[ ${QAD_L2_NIC_SUBSYS:-} =~ ^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$ ]]; then NICOPTS=",subsys_ven=0x${BASH_REMATCH[1]},subsys=0x${BASH_REMATCH[2]}"; fi
+PCISUB=()
+if [[ ${QAD_L2_PCI_SUBSYS:-} =~ ^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$ ]] && grep -qs 0004-pci-default-subsystem-id "${QB%/bin/*}/.qemu-ad-configure-flags"; then
+  PCISUB=(-global "q35-pcihost.x-pci-sub-vendor-id=0x${BASH_REMATCH[1]}" -global "q35-pcihost.x-pci-sub-device-id=0x${BASH_REMATCH[2]}")
+fi
 RPG="pcie-root-port,id=rpg,chassis=11,slot=1"
 [ -z "${QAD_L2_GPU_LINK_SPEED:-}" ] || RPG="$RPG,x-speed=${QAD_L2_GPU_LINK_SPEED/./_}"
 [ -z "${QAD_L2_GPU_LINK_WIDTH:-}" ] || RPG="$RPG,x-width=$QAD_L2_GPU_LINK_WIDTH"
@@ -92,7 +98,8 @@ rm -f "$QMPS"
   -drive file="$WD",format=raw,if=none,id=wdisk,cache=none,aio=native,discard=unmap \
   -device ide-hd,drive=wdisk,bus=ide.1,rotation_rate=1 \
   "${CDS[@]}" \
-  -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device e1000e,netdev=n0,mac="$QAD_L2_MAC" \
+  -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device "e1000e,netdev=n0,mac=$QAD_L2_MAC$NICOPTS" \
+  "${PCISUB[@]}" \
   -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string="$QAD_MMIO64_MB" \
   -qmp "unix:$QMPS,server,nowait" -vga std -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
   -device "$RPG" \

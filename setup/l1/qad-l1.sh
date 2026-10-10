@@ -301,6 +301,18 @@ L2_DHCP_END=$QAD_L2_DHCP_END
 EXTRA="$extra"
 CONF
   [ -z "$cdrom" ] || printf '%s\n' "$cdrom" >>/etc/qemu-ad-l2.env
+  # l2.usb_tablet: auto = the QEMU USB tablet (VID_0627) only while the emulated VGA / VNC console exists
+  if [ "${QAD_L2_USB_TABLET:-auto}" = yes ] || { [ "${QAD_L2_USB_TABLET:-auto}" = auto ] && [ "$vga" != none ]; }; then
+    echo "USB_TABLET=1" >>/etc/qemu-ad-l2.env
+  fi
+  # l2.nic_subsystem / l2.pci_subsystem (vendor:device hex): e1000e subsystem IDs, and the default subsystem of the other devices (patch 0004;
+  # plan.py only passes QAD_L2_PCI_SUBSYS when that patch is in the list)
+  if [[ ${QAD_L2_NIC_SUBSYS:-} =~ ^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$ ]]; then
+    printf 'NIC_SUBSYS_VENDOR=0x%s\nNIC_SUBSYS_ID=0x%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >>/etc/qemu-ad-l2.env
+  fi
+  if [[ ${QAD_L2_PCI_SUBSYS:-} =~ ^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$ ]]; then
+    printf 'PCI_SUBSYS_VENDOR=0x%s\nPCI_SUBSYS_ID=0x%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >>/etc/qemu-ad-l2.env
+  fi
   # l2.gpu_link_speed / l2.gpu_link_width: link the GPU root port ("rpg") advertises (start-l2.sh GPU_LINK_*; empty = QEMU default)
   [ -z "${QAD_L2_GPU_LINK_SPEED:-}" ] || printf 'GPU_LINK_SPEED=%s\n' "$QAD_L2_GPU_LINK_SPEED" >>/etc/qemu-ad-l2.env
   [ -z "${QAD_L2_GPU_LINK_WIDTH:-}" ] || printf 'GPU_LINK_WIDTH=%s\n' "$QAD_L2_GPU_LINK_WIDTH" >>/etc/qemu-ad-l2.env

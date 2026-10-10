@@ -249,7 +249,7 @@ def test_l1_env_optional_identity_defaults_on_and_opt_out(tmp_path):
                 out[k] = shlex.split(v)[0] if shlex.split(v) else ""
         return out
     d = vals({})
-    assert d["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model"
+    assert d["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id"
     assert [d[k] for k in ("QAD_L2_OEM_ID", "QAD_L2_OEM_TABLE_ID", "QAD_L2_OEM_REVISION")] == ["ALASKA", "A M I", "0x1072009"]
     assert d["QAD_L2_OVMF_IDENTITY"] == "1" and d["QAD_L2_OVMF_BUILD"] == "1"
     n = vals({"l2.optional_patches": "none", "l2.ovmf_identity": "no"})
@@ -258,3 +258,6 @@ def test_l1_env_optional_identity_defaults_on_and_opt_out(tmp_path):
               "l2.oem_table_id": "A M I", "l2.ovmf_identity_dir": "/root/ovmf"})
     assert o["QAD_L2_OPTIONAL_PATCHES"] == "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision"
     assert o["QAD_L2_OEM_TABLE_ID"] == "A M I" and o["QAD_L2_OVMF_IDENTITY"] == "1"
+    # subsystem IDs: NIC always, the chipset default only with patch 0004
+    assert d["QAD_L2_NIC_SUBSYS"] == "1043:8369" and d["QAD_L2_PCI_SUBSYS"] == "1043:8877"
+    assert n["QAD_L2_NIC_SUBSYS"] == "1043:8369" and n["QAD_L2_PCI_SUBSYS"] == "" and o["QAD_L2_PCI_SUBSYS"] == ""

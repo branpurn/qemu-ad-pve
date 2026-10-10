@@ -88,6 +88,7 @@ def test_stage_files_and_l2_addresses():
 @pytest.mark.parametrize("key,val,frag", [
     ("mac_oui", "A4:BF:01", "mac_oui"), ("mac_oui", "01:00:5e", "unicast"), ("mac_oui", "a4:bf", "mac_oui"),
     ("disk_model", "x,y", "disk_model"), ("smbios", "qemu", "smbios"), ("vga", "qxl", "vga"),
+    ("nic_subsystem", "1043", "nic_subsystem"), ("pci_subsystem", "zzzz:0001", "pci_subsystem"),
     ("gpu_link_speed", "3", "gpu_link_speed"), ("gpu_link_width", "3", "gpu_link_width"),
 ])
 def test_l2_identity_rejects_bad_values(key, val, frag):
@@ -114,7 +115,7 @@ def test_optional_identity_keys_default_on_and_validate():
     c = Config(base)
     assert [c["l2." + k] for k in ("optional_patches", "oem_id", "oem_table_id", "oem_revision",
                                    "ovmf_identity", "ovmf_identity_dir")] == [
-        "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model", "ALASKA", "A M I", "0x1072009", "yes", ""]
+        "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id", "ALASKA", "A M I", "0x1072009", "yes", ""]
     assert cross_validate(c) == []
     assert cross_validate(Config(dict(base, **{"l2.optional_patches": "none", "l2.ovmf_identity": "no"}))) == []
     assert any("ovmf_identity" in p for p in cross_validate(Config(dict(base, **{"l2.ovmf_identity": "maybe"}))))

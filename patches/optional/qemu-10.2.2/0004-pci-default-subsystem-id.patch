@@ -1,0 +1,62 @@
+--- a/hw/pci/pci.c
++++ b/hw/pci/pci.c
+@@ -337,6 +337,13 @@
+ static uint16_t pci_default_sub_vendor_id = PCI_SUBVENDOR_ID_REDHAT_QUMRANET;
+ static uint16_t pci_default_sub_device_id = PCI_SUBDEVICE_ID_QEMU;
+ 
++/* qemu-ad-pve optional patch: let the machine choose the subsystem IDs that devices without their own get. */
++void pci_set_default_subsystem(uint16_t vendor_id, uint16_t device_id)
++{
++    pci_default_sub_vendor_id = vendor_id;
++    pci_default_sub_device_id = device_id;
++}
++
+ PCIHostStateList pci_host_bridges;
+ 
+ int pci_bar(PCIDevice *d, int reg)
+--- a/hw/pci-host/q35.c
++++ b/hw/pci-host/q35.c
+@@ -50,6 +50,12 @@
+     Q35PCIHost *s = Q35_HOST_DEVICE(dev);
+     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+ 
++    /* qemu-ad-pve optional patch: -global q35-pcihost.x-pci-sub-vendor-id=... / x-pci-sub-device-id=...
++     * (applies to every device created after the host bridge that has no subsystem ID of its own) */
++    if (s->pci_sub_vendor_id || s->pci_sub_device_id) {
++        pci_set_default_subsystem(s->pci_sub_vendor_id, s->pci_sub_device_id);
++    }
++
+     memory_region_add_subregion(s->mch.address_space_io,
+                                 MCH_HOST_BRIDGE_CONFIG_ADDR, &pci->conf_mem);
+     sysbus_init_ioports(sbd, MCH_HOST_BRIDGE_CONFIG_ADDR, 4);
+@@ -182,6 +188,8 @@
+     DEFINE_PROP_BOOL(PCI_HOST_PROP_SMM_RANGES, Q35PCIHost,
+                      mch.has_smm_ranges, true),
+     DEFINE_PROP_BOOL("x-pci-hole64-fix", Q35PCIHost, pci_hole64_fix, true),
++    DEFINE_PROP_UINT16("x-pci-sub-vendor-id", Q35PCIHost, pci_sub_vendor_id, 0),
++    DEFINE_PROP_UINT16("x-pci-sub-device-id", Q35PCIHost, pci_sub_device_id, 0),
+ };
+ 
+ static void q35_host_class_init(ObjectClass *klass, const void *data)
+--- a/include/hw/pci/pci.h
++++ b/include/hw/pci/pci.h
+@@ -268,6 +268,8 @@
+ uint8_t pci_find_capability(PCIDevice *pci_dev, uint8_t cap_id);
+ 
+ 
++void pci_set_default_subsystem(uint16_t vendor_id, uint16_t device_id);
++
+ uint32_t pci_default_read_config(PCIDevice *d,
+                                  uint32_t address, int len);
+ void pci_default_write_config(PCIDevice *d,
+--- a/include/hw/pci-host/q35.h
++++ b/include/hw/pci-host/q35.h
+@@ -64,6 +64,8 @@
+     /*< public >*/
+ 
+     bool pci_hole64_fix;
++    uint16_t pci_sub_vendor_id; /* qemu-ad-pve: default PCI subsystem IDs (0 = unchanged) */
++    uint16_t pci_sub_device_id;
+     MCHPCIState mch;
+ };
+ 

@@ -223,7 +223,7 @@ def evaluate(env, facts):
 
     if "ghost.count" in facts:
         if env.get("QAD_L2_CLEAN_GHOSTS", "1") == "1":
-            r.check("Stale device instances (old CD / ASUS HARDDISK / Standard VGA)", facts["ghost.count"] == "0",
+            r.check("Stale device instances (old CD / ASUS HARDDISK / Standard VGA / old-subsystem Intel devices)", facts["ghost.count"] == "0",
                     facts["ghost.ids"] if facts["ghost.count"] != "0" else "none", "none")
         else:
             r.add("INFO", "Stale device instances", facts["ghost.ids"] or "none", "(l2.cleanup_ghosts = no)")

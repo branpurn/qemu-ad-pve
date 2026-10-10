@@ -6,5 +6,9 @@ echo "l1.cpuinfo_hypervisor_flag=$(grep -m1 '^flags' /proc/cpuinfo | grep -qw hy
 for f in bios_vendor bios_version sys_vendor product_name board_vendor board_name chassis_type chassis_vendor; do
   echo "l1.dmi.$f=$(cat $d/$f 2>/dev/null || true)"
 done
-echo "l1.qemu_optpatches=$(sed 's/.*# optional-patches=//p;d' /opt/qemu-ad-optpatch/.qemu-ad-configure-flags 2>/dev/null)"
+# the QEMU the L2 actually uses (QB in the env file; a hand-swapped build such as /opt/qemu-ad-w2 counts), else the default path
+qb=$(sed -n 's/^QB=//p' /etc/qemu-ad-l2.env 2>/dev/null | tail -1 | tr -d "\"'")
+qpre=${qb%/bin/*}
+[ -n "$qb" ] && [ -f "$qpre/.qemu-ad-configure-flags" ] || qpre=/opt/qemu-ad-optpatch
+echo "l1.qemu_optpatches=$(sed 's/.*# optional-patches=//p;d' "$qpre/.qemu-ad-configure-flags" 2>/dev/null)"
 echo "l1.kvm_dev=$([ -c /dev/kvm ] && echo present || echo missing)"

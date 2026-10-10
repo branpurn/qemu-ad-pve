@@ -130,9 +130,9 @@ SCHEMA: List[Key] = [
         "desktop = the L2 SMBIOS type 3 is a raw structure with chassis type 3 (Desktop) and ASUS strings "
         "(QEMU's own type 3 is chassis type 1 'Other' with 'Default string'); none = the type=3 fields of l2.smbios. "
         "Needs l2.smbios = asus-am5"),
-    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id",
-        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = all four "
-        "(omit the WAET table + configurable ACPI OEM ids + ATAPI INQUIRY vendor/product from the CD model + default PCI subsystem IDs). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
+    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id,0005-acpi-omit-fwcfg-device",
+        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = all five "
+        "(omit the WAET table + configurable ACPI OEM ids + ATAPI INQUIRY vendor/product from the CD model + default PCI subsystem IDs + no fw_cfg ACPI device). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
         "(the L2 uses it via QB=; /opt/qemu-ad stays untouched). 'none' = opt out (the L2 keeps /opt/qemu-ad)"),
     Key("l2", "usb_tablet", "auto",
         "auto = the QEMU USB tablet (USB VID_0627&PID_0001) is attached only while the emulated VGA exists (console use), yes = always, no = never "

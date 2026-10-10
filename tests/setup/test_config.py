@@ -115,7 +115,7 @@ def test_optional_identity_keys_default_on_and_validate():
     c = Config(base)
     assert [c["l2." + k] for k in ("optional_patches", "oem_id", "oem_table_id", "oem_revision",
                                    "ovmf_identity", "ovmf_identity_dir")] == [
-        "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id", "ALASKA", "A M I", "0x1072009", "yes", ""]
+        "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id,0005-acpi-omit-fwcfg-device", "ALASKA", "A M I", "0x1072009", "yes", ""]
     assert cross_validate(c) == []
     assert cross_validate(Config(dict(base, **{"l2.optional_patches": "none", "l2.ovmf_identity": "no"}))) == []
     assert any("ovmf_identity" in p for p in cross_validate(Config(dict(base, **{"l2.ovmf_identity": "maybe"}))))

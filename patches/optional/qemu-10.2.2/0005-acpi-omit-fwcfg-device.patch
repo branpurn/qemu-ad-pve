@@ -1,0 +1,16 @@
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -1183,8 +1183,11 @@
+     aml_append(scope, aml_name_decl("_S5", pkg));
+     aml_append(dsdt, scope);
+ 
+-    /* create fw_cfg node, unconditionally */
+-    {
++    /*
++     * qemu-ad-pve optional patch: no fw_cfg ACPI device (FWCF, _HID ASUS0002). Windows has no driver for it (hidden device with
++     * Code 28 in the PnP list); OVMF talks to fw_cfg through its I/O ports, not through ACPI.
++     */
++    if (0) {
+         scope = aml_scope("\\_SB.PCI0");
+         fw_cfg_add_acpi_dsdt(scope, x86ms->fw_cfg);
+         aml_append(dsdt, scope);

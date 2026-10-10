@@ -22,6 +22,10 @@ P 'residue.staging' ((@('nvidia', 'python', 'openssh', 'firstlogon.ps1', 'firstl
 $mon = @(Get-PnpDevice -Class Monitor -PresentOnly -ErrorAction SilentlyContinue)
 P 'monitor.pnp' (($mon | ForEach-Object { $_.FriendlyName }) -join ',')
 P 'monitor.cim' ((Get-CimInstance Win32_DesktopMonitor | ForEach-Object { $_.Name }) -join ',')
+# PCI devices Windows enumerates (VEN/DEV/SUBSYS), the QEMU USB tablet, and present devices that report a problem
+P 'pci.ids' ((Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'PCI\*' } | ForEach-Object { (($_.InstanceId -split '\\')[1] -replace '&REV_.*', '') }) -join ',')
+P 'usb.qemu_tablet' (@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB\VID_0627*' }).Count)
+P 'pnp.problems' ((Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Error' } | ForEach-Object { ($_.InstanceId -split '\\')[0..1] -join '\' }) -join ',')
 # stale (not present) device instances of earlier VM identities (same filter as setup/l1/windows/ghosts.ps1)
 $present = @((Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue).InstanceId)
 $ghost = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
@@ -33,6 +37,8 @@ $ghost = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
     # emulated Intel devices (e1000e, ICH9, root port) that were enumerated with QEMU's default subsystem ID before l2.nic_subsystem / l2.pci_subsystem
     ($id -match '^PCI\\VEN_8086&DEV_(10D3|000C|29[0-9A-F]{2})&SUBSYS_(00008086|80868086)') -or
     # the QEMU USB tablet after it was detached (l2.usb_tablet)
-    ($id -match '^USB\\VID_0627&PID_0001')) })
+    ($id -match '^USB\\VID_0627&PID_0001') -or
+    # the hidden fw_cfg ACPI device (l2 optional patch 0005 removes it from the DSDT)
+    ($id -match '^ACPI\\ASUS0002\\')) })
 P 'ghost.count' $ghost.Count
 P 'ghost.ids' (($ghost | ForEach-Object { $_.InstanceId }) -join ',')

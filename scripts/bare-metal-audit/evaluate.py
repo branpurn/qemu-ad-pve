@@ -221,6 +221,35 @@ def evaluate(env, facts):
               "generic: no EDID without an attached display; an HDMI/DP EDID emulator dongle is the only working fix (docs/bare-metal-appearance.md)"
               if generic else "")
 
+    if "pci.ids" in facts:
+        pci = [x for x in facts["pci.ids"].split(",") if x]
+        nic = env.get("QAD_L2_NIC_SUBSYS", "")
+        if nic:
+            want = "VEN_8086&DEV_10D3&SUBSYS_%s%s" % (nic[5:].upper(), nic[:4].upper())
+            r.check("L2 NIC subsystem ID (e1000e)", want in pci, ", ".join(x for x in pci if "DEV_10D3" in x) or "no e1000e", want)
+        else:
+            r.add("INFO", "L2 NIC subsystem ID", ", ".join(x for x in pci if "DEV_10D3" in x), "(l2.nic_subsystem empty: QEMU 8086:0000)")
+        chip = [x for x in pci if x.startswith("VEN_8086") and "DEV_10D3" not in x and "DEV_000C" not in x]
+        sub = env.get("QAD_L2_PCI_SUBSYS", "")
+        if sub:
+            tail = "SUBSYS_%s%s" % (sub[5:].upper(), sub[:4].upper())
+            bad = [x for x in chip if tail not in x]
+            r.check("L2 chipset devices subsystem ID (ICH9 / host bridge)", bool(chip) and not bad, ", ".join(bad) if bad else "%d devices %s" % (len(chip), tail), tail)
+        else:
+            r.add("INFO", "L2 chipset devices subsystem ID", "QEMU default 8086:8086", "(patch 0004 off or l2.pci_subsystem empty)")
+    if "usb.qemu_tablet" in facts:
+        tab = env.get("QAD_L2_USB_TABLET", "auto")
+        want_absent = tab == "no" or (tab == "auto" and (env.get("QAD_L2_VGA") == "none" or env.get("QAD_L2_VGA_AFTER", "none") == "none"))
+        if want_absent:
+            r.check("L2 QEMU USB tablet (VID_0627) absent", facts["usb.qemu_tablet"] == "0", facts["usb.qemu_tablet"] + " present", "0")
+        else:
+            r.add("INFO", "L2 QEMU USB tablet", facts["usb.qemu_tablet"] + " present", "(l2.usb_tablet = yes / VGA kept)")
+    if "pnp.problems" in facts:
+        if "0005-acpi-omit-fwcfg-device" in patches:
+            r.check("L2 present devices with a problem code", not facts["pnp.problems"], facts["pnp.problems"] or "none", "none")
+        else:
+            r.add("INFO", "L2 present devices with a problem code", facts["pnp.problems"] or "none", "(patch 0005 off: the hidden fw_cfg ACPI device ASUS0002 shows up)")
+
     if "ghost.count" in facts:
         if env.get("QAD_L2_CLEAN_GHOSTS", "1") == "1":
             r.check("Stale device instances (old CD / ASUS HARDDISK / Standard VGA / old-subsystem Intel devices)", facts["ghost.count"] == "0",

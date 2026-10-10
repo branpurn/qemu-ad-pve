@@ -183,6 +183,14 @@ def evaluate(env, facts):
     else:
         r.add("SKIP", "ACPI / registry", "not collected", "")
 
+    if "residue.unattend" in facts:
+        for key, label, opt in (("residue.unattend", "Answer-file residue (unattend.xml, Panther)", "QAD_L2_CLEAN_UNATTEND"),
+                                ("residue.staging", "Staging residue (C:\\qad installers, firstlogon/gpu-driver)", "QAD_L2_CLEAN_STAGING")):
+            if env.get(opt, "1") == "1":
+                r.check(label, facts[key] == "", facts[key] or "none", "none")
+            else:
+                r.add("INFO", label, facts[key] or "none", "(l2.cleanup_* = no)")
+
     gpu = [(n, c) for n, c in zip(indexed(facts, "video", "name"), indexed(facts, "video", "code")) if "NVIDIA" in n]
     r.check("L2 GPU problem code", bool(gpu) and all(c == "0" for _, c in gpu), ", ".join(f"{n}: {c}" for n, c in gpu) or "no NVIDIA device", "0")
     return r

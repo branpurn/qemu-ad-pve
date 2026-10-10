@@ -674,6 +674,18 @@ def s_verify(c: Ctx) -> str:
         time.sleep(60)
 
 
+def s_l2_finalize(c: Ctx) -> str:
+    """Post-verify cleanup in the L2 (qad-l1.sh finalize: hygiene, ... then verify again)."""
+    if c.cfg["l2.source"] == "none":
+        raise _Skip("l2.source=none")
+    if not (c.cfg.bool("l2.cleanup_unattend") or c.cfg.bool("l2.cleanup_staging")):
+        raise _Skip("all post-install cleanups opted out")
+    c.l1("finalize", timeout=1500)  # raises CommandError when a cleanup or the re-verify fails
+    if c.dry:
+        return "dry"
+    return "residue removed (unattend/Panther, staging), verify PASS"
+
+
 class _Skip(Exception):
     pass
 
@@ -714,6 +726,7 @@ STEPS: List[tuple] = [
     ("l2_install", "create Windows L2 (no GPU)", s_l2_install),
     ("l2_enable", "start L2 with GPU (autostart)", s_l2_enable),
     ("verify", "verify (KVM, L2, GPU Code 0)", s_verify),
+    ("l2_finalize", "post-verify cleanup of install residue in the L2", s_l2_finalize),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
 

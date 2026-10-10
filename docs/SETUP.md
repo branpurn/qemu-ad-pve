@@ -134,6 +134,8 @@ report a plausible desktop (answers-file keys under `[l2]`, all optional):
 | `mac_oui` | `a4:bf:01` | an Intel OUI instead of QEMU's `52:54:00` |
 | `disk_model` / `disk_serial` / `disk_firmware` | Samsung SSD 980 PRO 1TB / derived / 5B2QGXA7 | the Windows disk |
 | `vga` | `std` | `none` removes the emulated VGA (QEMU PCI 1234:1111); set it after the install, when VNC is no longer needed |
+| `cleanup_unattend` | `yes` | after the first successful verify the `l2_finalize` step deletes `unattend.xml`, `UnattendGC`, `actionqueue` and the Setup/Panther logs in the L2 |
+| `cleanup_staging` | `yes` | same step deletes the staged installers and one-shot first-boot scripts/logs in `C:\qad` (keeps `venv`, `py`, `audit`, `pytorch-offline-bench.py`, sshd, the admin account) |
 
 These end up in `/etc/qemu-ad-l2.env` (`CPU`, `L2_MAC`, `DISK_*`, `VGA`, `SMBIOS_FILE`) and are applied by
 `start-l2.sh`. Changing `mac_oui` on an installed L2 changes its MAC; `l2net-up.sh` drops a stale DHCP lease

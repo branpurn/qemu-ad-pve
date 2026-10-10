@@ -41,7 +41,7 @@ def good_facts(env):
         "disk.0.model": env["QAD_L2_DISK_MODEL"], "disk.0.firmware": env["QAD_L2_DISK_FW"],
         "nic.0.mac": env["QAD_L2_MAC"].upper().replace(":", "-"),
         "video.0.name": "NVIDIA GeForce RTX 4080", "video.0.code": "0", "systeminfo.hypervisor_lines": "0",
-        "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
+        "residue.unattend": "", "residue.staging": "", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
         "acpi.tables": "MCFG,FACP,APIC,HPET,BGRT",
         "reg.SystemBiosVersion": "ALASKA - 1072009 ; 1654 ; American Megatrends International, LLC. - 5001B",
     }
@@ -80,6 +80,8 @@ def test_each_regression_is_a_fail():
         ("reg.SystemBiosVersion", "BOCHS - 1 ; 1654 ; EDK II", "SystemBiosVersion"),
         ("l1.detect_virt", "qemu", "systemd-detect-virt"),
         ("video.0.code", "43", "GPU problem code"),
+        ("residue.unattend", "C:\\Windows\\Panther\\unattend.xml", "Answer-file residue"),
+        ("residue.staging", "nvidia,firstlogon.ps1", "Staging residue"),
     ]:
         f = good_facts(env)
         f[key] = val
@@ -94,6 +96,15 @@ def test_opt_outs_are_not_failures():
               "cs.model": "Standard PC", "l1.detect_virt": "qemu", "l1.dmi.sys_vendor": "QEMU"})
     r = ev.evaluate(env, f)
     assert not r.failed, [x for x in r.rows if x[0] == "FAIL"]
+
+
+def test_residue_opt_out_is_info():
+    env = default_env(l2__cleanup_unattend="no", l2__cleanup_staging="no")
+    f = good_facts(env)
+    f.update({"residue.unattend": "C:\\Windows\\Panther\\unattend.xml", "residue.staging": "nvidia"})
+    r = ev.evaluate(env, f)
+    assert not r.failed
+    assert [x[0] for x in r.rows if "residue" in x[1]] == ["INFO", "INFO"]
 
 
 def test_l2_unreachable_is_skip_not_pass_or_fail():

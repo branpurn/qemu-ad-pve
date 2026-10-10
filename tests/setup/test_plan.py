@@ -183,6 +183,7 @@ def test_l1_env_carries_l2_identity(tmp_path):
     assert vals["QAD_L2_MAC"].startswith("a4:bf:01:")
     assert vals["QAD_L2_DISK_MODEL"] == "Samsung SSD 980 PRO 1TB" and vals["QAD_L2_DISK_SERIAL"]
     assert vals["QAD_L2_SMBIOS"].count("|") == 5 and vals["QAD_L2_VGA"] == "std"
+    assert vals["QAD_L2_CLEAN_UNATTEND"] == "1" and vals["QAD_L2_CLEAN_STAGING"] == "1"
 
 
 def test_l1_smbios_structures_are_valid_and_not_a_vm():

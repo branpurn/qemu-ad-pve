@@ -134,6 +134,13 @@ SCHEMA: List[Key] = [
     Key("l2", "vga", "std",
         "std = emulated VGA (QEMU PCI 1234:1111; needed to watch the install over VNC); "
         "none = no emulated VGA, the passed-through GPU is the only display (use after install)"),
+    Key("l2", "cleanup_unattend", "yes",
+        "After the first successful verify, delete the answer-file copies (C:\\Windows\\Panther\\unattend.xml, UnattendGC, "
+        "actionqueue, other Setup/Panther logs) from the L2 (setup residue; docs/bare-metal-appearance.md). no = keep", "bool"),
+    Key("l2", "cleanup_staging", "yes",
+        "After the first successful verify, delete the staged installers and one-shot first-boot scripts/logs from "
+        "C:\\qad in the L2 (nvidia, python, openssh, firstlogon.*, gpu-driver.*). The venv, py, audit dir, sshd and the "
+        "admin account stay. no = keep", "bool"),
     Key("l2", "net_cidr", "10.254.77.0/24", "Isolated L1<->L2 network (no NAT, no internet for L2)", "cidr"),
     Key("l2", "install_timeout_min", "240", "Max minutes to wait for the Windows install/first boot", "int",
         minimum=10),

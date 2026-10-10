@@ -88,6 +88,7 @@ def test_stage_files_and_l2_addresses():
 @pytest.mark.parametrize("key,val,frag", [
     ("mac_oui", "A4:BF:01", "mac_oui"), ("mac_oui", "01:00:5e", "unicast"), ("mac_oui", "a4:bf", "mac_oui"),
     ("disk_model", "x,y", "disk_model"), ("smbios", "qemu", "smbios"), ("vga", "qxl", "vga"),
+    ("gpu_link_speed", "3", "gpu_link_speed"), ("gpu_link_width", "3", "gpu_link_width"),
 ])
 def test_l2_identity_rejects_bad_values(key, val, frag):
     probs = cross_validate(Config({"l2." + key: val, "l2.windows_iso": "local:iso/w.iso"}))

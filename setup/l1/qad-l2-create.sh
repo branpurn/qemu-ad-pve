@@ -50,6 +50,9 @@ find_win_cd() {
   return 1
 }
 
+RPG="pcie-root-port,id=rpg,chassis=11,slot=1"
+[ -z "${QAD_L2_GPU_LINK_SPEED:-}" ] || RPG="$RPG,x-speed=${QAD_L2_GPU_LINK_SPEED/./_}"
+[ -z "${QAD_L2_GPU_LINK_WIDTH:-}" ] || RPG="$RPG,x-width=$QAD_L2_GPU_LINK_WIDTH"
 CDS=()
 # same optical-drive identity at install time as in normal boots (no extra Windows device identities)
 CDOPT=""
@@ -92,7 +95,7 @@ rm -f "$QMPS"
   -netdev tap,id=n0,ifname=tapl2,script=no,downscript=no -device e1000e,netdev=n0,mac="$QAD_L2_MAC" \
   -fw_cfg name=opt/ovmf/X-PciMmio64Mb,string="$QAD_MMIO64_MB" \
   -qmp "unix:$QMPS,server,nowait" -vga std -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
-  -device pcie-root-port,id=rpg,chassis=11,slot=1 \
+  -device "$RPG" \
   -pidfile "$W/install.pid" &
 qpid=$!
 

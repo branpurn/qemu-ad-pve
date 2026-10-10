@@ -13,4 +13,11 @@ got=$(run ':')
 got=$(run "OEM_ID=ALASKA; OEM_TABLE_ID='A M I   '; OEM_REVISION=0x1072009; OVMF_CODE=/opt/x/C.fd")
 [ "$got" = "q35,accel=kvm,x-oem-id=ALASKA,x-oem-table-id=A M I   ,x-oem-revision=0x1072009|/opt/x/C.fd|/root/w10/VARS.fd" ] || { echo "FAIL opt-in: $got"; exit 1; }
 grep -q -- '-machine "\$MACHINE"' "$f" && grep -q 'file="\$OVMF_CODE"' "$f" && grep -q 'file="\$OVMF_VARS"' "$f" || { echo "FAIL exec line"; exit 1; }
+rblk=$(sed -n '/^RPG="pcie-root-port/,/^\[ -n "\${GPU_LINK_WIDTH/p' "$f")
+[ -n "$rblk" ] || { echo "FAIL: RPG block not found"; exit 1; }
+rrun() { env -i bash -c "$1; $rblk; printf '%s' \"\$RPG\""; }
+[ "$(rrun ':')" = "pcie-root-port,id=rpg,chassis=11,slot=1" ] || { echo "FAIL rpg default"; exit 1; }
+[ "$(rrun 'GPU_LINK_SPEED=16; GPU_LINK_WIDTH=16')" = "pcie-root-port,id=rpg,chassis=11,slot=1,x-speed=16,x-width=16" ] || { echo "FAIL rpg 16/16"; exit 1; }
+[ "$(rrun 'GPU_LINK_SPEED=2.5; GPU_LINK_WIDTH=4')" = "pcie-root-port,id=rpg,chassis=11,slot=1,x-speed=2_5,x-width=4" ] || { echo "FAIL rpg 2.5/4"; exit 1; }
+grep -q -- '-device "\$RPG"' "$f" || { echo "FAIL rpg exec line"; exit 1; }
 echo "start-l2-optional-test: ok"

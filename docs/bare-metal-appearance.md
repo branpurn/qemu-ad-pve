@@ -20,6 +20,7 @@ a lab; it is not a way to defeat anti-cheat or other integrity systems and has n
 | Optical drive named like a real one: Windows shows `ASUS DRW-24B1ST` (default) instead of the base patch's `ASUS ASUS DVD-ROM`; the same identity is used from the install on, and the staging ISO is ejected after the first successful verify (the empty drive stays; `stage.iso` stays in L1 for a reinstall) | L2 | `l2.cdrom_model`, `l2.cdrom_firmware`, `l2.detach_stage_iso` | `start-l2.sh` (`CDROM_MODEL`/`CDROM_VER`/`STAGE_ISO`), `qad-l2-create.sh`, optional QEMU patch `0003-atapi-inquiry-from-model` (needed because `ide-cd` takes `model=`/`ver=` but its INQUIRY strings are hardcoded), `qad-l1.sh detach-stage` |
 | Emulated Standard VGA (PCI 1234:1111) gone: the RTX is the only display adapter (the L2 restarts once after the first successful verify; reverted automatically when verify, the display check (`vga-check.ps1`: RTX only, Code 0, `dwm.exe` running in the console session) fails) | L2 | `l2.vga_after_verify = none` | `qad-l1.sh finalize` (`vga.switched` marker, `VGA=none` in `/etc/qemu-ad-l2.env`) |
 | Stale device instance keys of earlier identities removed (old CD-ROM instances, install-time `ASUS HARDDISK`, the Standard VGA after it is gone); keys exported to `/root/w10/ghost-backup/` in L1 first; present, NVIDIA, Samsung and volume entries are never touched | L2 | `l2.cleanup_ghosts = yes` | `setup/l1/windows/ghosts.ps1` as SYSTEM via a one-shot scheduled task (`qad-l1.sh ghosts`) |
+| GPU root port ("rpg") advertises a CPU-like Gen4 x16 link instead of QEMU's Gen4 x32 default | L2 | `l2.gpu_link_speed = 16`, `l2.gpu_link_width = 16` (empty = QEMU default) | `start-l2.sh` (`GPU_LINK_SPEED`/`GPU_LINK_WIDTH` -> `pcie-root-port,...,x-speed=16,x-width=16`), `qad-l2-create.sh` |
 | QEMU PCI/chipset IDs rewritten | L2 | always (qemu-anti-detection patch) | `qemu-ad-pve.sh` |
 | No install residue: `C:\Windows\Panther\unattend.xml` (+ `UnattendGC`, `actionqueue`, Setup/Panther logs, other answer-file copies; the audit row looks at the answer files and `actionqueue`: Windows itself recreates a few hundred bytes of `Panther\UnattendGC` logs, without credentials, at every boot) removed | L2 | `l2.cleanup_unattend = yes` | `setup/l1/windows/hygiene.ps1` run by the `l2_finalize` step (`qad-l1.sh finalize`) after the first successful verify |
 | No staging leftovers: `C:\qad\nvidia`, `python`, `openssh`, `firstlogon.*`, `gpu-driver.*`, `w10-code43-check.ps1` removed (kept: `venv`, `py`, `audit`, `authorized_keys`, `pytorch-offline-bench.py` which `setup.sh verify` runs; sshd and the admin account) | L2 | `l2.cleanup_staging = yes` | same script; skipped while the NVIDIA driver is not installed yet |
@@ -52,6 +53,22 @@ The PVE host itself stays stock (no host package, kernel, modprobe or `storage.c
 * PCI device list in general (Q35/ICH9 bridges, virtio/AHCI/e1000e controllers, USB tablet), timing behaviour (TSC,
   RDTSCP/latency measurements), the `QEMU` / `Bochs` strings in the DSDT/SSDT that Windows does not enumerate, and a
   hypervisor seen by anything that runs on the PVE host.
+
+## GPU PCIe link (what the guest sees, 2026-10-10 findings)
+
+* On the lab host the RTX 4080 sits behind GPP bridge `00:01.5` whose own capability is **Gen4 x4** (`LnkCap` Port #3, 16GT/s x4): the physical slot
+  is an x4 slot, so the card's `LnkCap` x16 shows as "x4 (downgraded)" on the host. At idle the link also drops to 2.5GT/s (ASPM L1 +
+  GPU power state, target stays 16GT/s); under a torch load the host link is **16GT/s x4** (polled `lspci -vv` at 00:01.5 and 02:00.0 while
+  the benchmark ran) and falls back when idle. Host ASPM policy is the kernel `default`; it was not touched.
+* Inside the L2, `nvidia-smi` reports `pcie.link.gen.current` 1 at idle and 4 under load, `.gen.max` 4, `.width.current` 4, `.width.max` 16.
+  NVML reads these from the GPU itself, not from the (emulated) PCI config space, so no QEMU option changes them and they are exactly what a real PC with
+  this card in this x4 slot reports. Pinned 1 GiB host<->device copies: 6.7 GB/s both ways (the x4 Gen4 limit is about 7.9 GB/s).
+* The L1 sees the GPU as a conventional PCI device behind `pcie-pci-bridge` (no PCI Express capability in `lspci -vv`); this arrangement is what
+  makes passthrough + vIOMMU work in the nested stack and is deliberately left as it is.
+* What `l2.gpu_link_speed/width` changes: the L2's own root port `rpg` (QEMU defaults: 16GT/s **x32**, which no real CPU port has) now advertises `x-speed=16,x-width=16`.
+  Live test on VM 9320: Code 0, verify PASS, torch 34.71 / 100.93 TFLOP/s, bandwidth identical to before, no AER/Xid, IO_PAGE_FAULT unchanged.
+  Values accepted by QEMU 10.2.2: speed 2.5 5 8 16 32 64 (written as `2_5` for 2.5), width 1 2 4 8 12 16 32.
+  Revert: empty both keys (or delete the `GPU_LINK_*` lines of `/etc/qemu-ad-l2.env`) and restart `w10-l2`.
 
 ## `setup.sh audit`
 

@@ -126,6 +126,11 @@ if [ -n "${CDROM_MODEL:-}" ]; then
   fi
   CDARGS+=(-device "ide-cd,drive=stg,bus=ide.2,model=$CDROM_MODEL${CDROM_VER:+,ver=$CDROM_VER}")
 fi
+# GPU root port ("rpg") link: QEMU's own defaults are Gen4 x32 (x-speed=16 x-width=32); a real CPU root port is x16. The guest sees this on the
+# root port only; the GPU's own link status (nvidia-smi) always follows the physical link behind the passthrough. Empty = QEMU default.
+RPG="pcie-root-port,id=rpg,chassis=11,slot=1"
+[ -n "${GPU_LINK_SPEED:-}" ] && RPG="$RPG,x-speed=${GPU_LINK_SPEED/./_}"
+[ -n "${GPU_LINK_WIDTH:-}" ] && RPG="$RPG,x-width=$GPU_LINK_WIDTH"
 # Intentional split of EXTRA env into argv words
 # shellcheck disable=SC2206
 EXTRA=(${EXTRA:-})
@@ -141,6 +146,6 @@ exec "$QB" -name w10-l2-ad -machine "$MACHINE" -cpu "$CPU" -smp "$L2_SMP" -m "$L
   -monitor unix:/root/w10/mon,server,nowait -qmp unix:/root/w10/qmp,server,nowait \
   -debugcon file:/root/w10/ovmf-debug.log -global isa-debugcon.iobase=0x402 \
   "${VGAARGS[@]}" "${SMB[@]}" -display none "${VNC[@]}" -usb -device usb-tablet -serial none \
-  -device pcie-root-port,id=rpg,chassis=11,slot=1 \
+  -device "$RPG" \
   "${GPUDEV[@]}" \
   "${CDARGS[@]}" "${EXTRA[@]}" -pidfile /root/w10/w10.pid -daemonize

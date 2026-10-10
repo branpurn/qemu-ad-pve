@@ -17,7 +17,13 @@ $ghost = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
   ($present -notcontains $id) -and ($id -notmatch 'VEN_10DE|SAMSUNG|^ROOT\\|^STORAGE\\') -and (
     ($_.Class -eq 'CDROM' -and $id -match '^(SCSI|IDE)\\CDROM') -or
     ($_.Class -eq 'DiskDrive' -and $id -match 'PROD_HARDDISK|QEMU_HARDDISK') -or
-    ($_.Class -eq 'Display' -and $id -match '^PCI\\VEN_1234&DEV_1111'))
+    ($_.Class -eq 'Display' -and $id -match '^PCI\\VEN_1234&DEV_1111') -or
+    # emulated Intel devices (e1000e, ICH9, root port) that were enumerated with QEMU's default subsystem ID before l2.nic_subsystem / l2.pci_subsystem
+    ($id -match '^PCI\\VEN_8086&DEV_(10D3|000C|29[0-9A-F]{2})&SUBSYS_(00008086|80868086)') -or
+    # the QEMU USB tablet after it was detached (l2.usb_tablet)
+    ($id -match '^USB\\VID_0627&PID_0001') -or
+    # the hidden fw_cfg ACPI device (l2 optional patch 0005 removes it from the DSDT)
+    ($id -match '^ACPI\\ASUS0002\\'))
 }
 Write-Output "GHOST_FOUND $(@($ghost).Count)"
 New-Item -ItemType Directory -Force -Path $Backup | Out-Null

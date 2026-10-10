@@ -130,10 +130,18 @@ SCHEMA: List[Key] = [
         "desktop = the L2 SMBIOS type 3 is a raw structure with chassis type 3 (Desktop) and ASUS strings "
         "(QEMU's own type 3 is chassis type 1 'Other' with 'Default string'); none = the type=3 fields of l2.smbios. "
         "Needs l2.smbios = asus-am5"),
-    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model",
-        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = all three "
-        "(omit the WAET table + configurable ACPI OEM ids + ATAPI INQUIRY vendor/product from the CD model). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
+    Key("l2", "optional_patches", "0001-acpi-omit-waet,0002-acpi-oem-id-table-id-revision,0003-atapi-inquiry-from-model,0004-pci-default-subsystem-id,0005-acpi-omit-fwcfg-device",
+        "Comma-separated optional QEMU patches (patches/optional/, docs/optional-qemu-patches.md); default = all five "
+        "(omit the WAET table + configurable ACPI OEM ids + ATAPI INQUIRY vendor/product from the CD model + default PCI subsystem IDs + no fw_cfg ACPI device). Built into /opt/qemu-ad-optpatch INSIDE L1 during install "
         "(the L2 uses it via QB=; /opt/qemu-ad stays untouched). 'none' = opt out (the L2 keeps /opt/qemu-ad)"),
+    Key("l2", "usb_tablet", "auto",
+        "auto = the QEMU USB tablet (USB VID_0627&PID_0001) is attached only while the emulated VGA exists (console use), yes = always, no = never "
+        "(the install VM keeps it for the VNC watch)"),
+    Key("l2", "nic_subsystem", "1043:8369",
+        "PCI subsystem vendor:device of the L2's e1000e (82574L), hex like 1043:8369 (ASUS onboard 82574L); empty = QEMU's 8086:0000. No patch needed"),
+    Key("l2", "pci_subsystem", "1043:8877",
+        "PCI subsystem vendor:device given to the other emulated devices (ICH9 LPC/AHCI/SMBus/USB/host bridge; QEMU: 8086:8086), hex; "
+        "needs optional patch 0004; empty = leave 8086:8086"),
     Key("l2", "oem_id", "ALASKA", "ACPI OEM ID (<=6 chars); needs patch 0002. Empty = INTEL"),
     Key("l2", "oem_table_id", "A M I", "ACPI OEM table ID (<=8 chars, space padded); needs patch 0002"),
     Key("l2", "oem_revision", "0x1072009", "ACPI OEM revision, hex; needs patch 0002"),
@@ -449,6 +457,11 @@ def cross_validate(cfg: Config) -> List[str]:
             bad.append(f"{k} may only contain letters, digits, space, '.', '_' and '-' (max 40)")
     if cfg["l2.cdrom_firmware"] and not cfg["l2.cdrom_model"]:
         bad.append("l2.cdrom_firmware needs l2.cdrom_model")
+    if cfg["l2.usb_tablet"] not in ("auto", "yes", "no"):
+        bad.append("l2.usb_tablet must be auto, yes or no")
+    for k in ("l2.nic_subsystem", "l2.pci_subsystem"):
+        if not re.fullmatch(r"([0-9a-fA-F]{4}:[0-9a-fA-F]{4})?", cfg[k]):
+            bad.append(f"{k} must be empty or vendor:device in hex like 1043:8877")
     if cfg["l2.gpu_link_speed"] not in ("", "2.5", "5", "8", "16", "32", "64"):
         bad.append("l2.gpu_link_speed must be empty or one of 2.5 5 8 16 32 64")
     if cfg["l2.gpu_link_width"] not in ("", "1", "2", "4", "8", "12", "16", "32"):

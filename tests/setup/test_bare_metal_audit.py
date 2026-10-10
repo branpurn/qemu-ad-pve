@@ -43,6 +43,8 @@ def good_facts(env):
         "video.0.name": "NVIDIA GeForce RTX 4080", "video.0.code": "0", "systeminfo.hypervisor_lines": "0",
         "cdrom.0.name": env["QAD_L2_CDROM_MODEL"], "cdrom.0.media": "False",
         "residue.unattend": "", "residue.staging": "", "ghost.count": "0", "ghost.ids": "", "monitor.pnp": "", "monitor.cim": "Default Monitor", "cpuid.hypervisor_bit": "0", "cpuid.leaf40000000": "0x0,0x0,0x0,0x0",
+        "pci.ids": "VEN_8086&DEV_29C0&SUBSYS_88771043,VEN_8086&DEV_2918&SUBSYS_88771043,VEN_8086&DEV_2922&SUBSYS_88771043,VEN_8086&DEV_10D3&SUBSYS_83691043,VEN_8086&DEV_000C&SUBSYS_00008086,VEN_10DE&DEV_2704&SUBSYS_268819DA",
+        "usb.qemu_tablet": "0", "pnp.problems": "",
         "acpi.tables": "MCFG,FACP,APIC,HPET,BGRT",
         "reg.SystemBiosVersion": "ALASKA - 1072009 ; 1654 ; American Megatrends International, LLC. - 5001B",
     }
@@ -123,6 +125,24 @@ def test_gpu_root_port_link_row():
     env2 = default_env(l2__gpu_link_speed="", l2__gpu_link_width="")
     r = ev.evaluate(env2, f)
     assert not r.failed and any(x[0] == "INFO" and "root port link" in x[1] for x in r.rows)
+
+
+def test_pci_ids_tablet_and_problem_rows():
+    env = default_env()
+    f = good_facts(env)
+    r = ev.evaluate(env, f)
+    assert not r.failed
+    names = [x[1] for x in r.rows if x[0] == "PASS"]
+    for n in ("L2 NIC subsystem ID (e1000e)", "L2 chipset devices subsystem ID (ICH9 / host bridge)",
+              "L2 QEMU USB tablet (VID_0627) absent", "L2 present devices with a problem code"):
+        assert n in names, n
+    bad = dict(f, **{"pci.ids": f["pci.ids"].replace("DEV_2922&SUBSYS_88771043", "DEV_2922&SUBSYS_80868086"),
+                     "usb.qemu_tablet": "1", "pnp.problems": "ACPI\\ASUS0002"})
+    r = ev.evaluate(env, bad)
+    assert len([x for x in r.rows if x[0] == "FAIL"]) == 3
+    r = ev.evaluate(default_env(l2__nic_subsystem="", l2__pci_subsystem="", l2__usb_tablet="yes",
+                                l2__optional_patches="0001-acpi-omit-waet"), bad)
+    assert not r.failed and sum(1 for x in r.rows if x[0] == "INFO" and ("subsystem" in x[1] or "tablet" in x[1] or "problem" in x[1])) == 4
 
 
 def test_vga_and_ghost_opt_outs_are_info():

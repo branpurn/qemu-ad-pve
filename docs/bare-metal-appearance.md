@@ -18,6 +18,8 @@ a lab; it is not a way to defeat anti-cheat or other integrity systems and has n
 | ACPI WAET table removed; ACPI OEM id / table id / revision `ALASKA` / `A M I` / `0x1072009` on every table QEMU writes | L2 | `l2.optional_patches` (both patches, built in L1) | `patches/optional/qemu-10.2.2/`, `steps.s_l1_optional_qemu`, docs/optional-qemu-patches.md |
 | Registry `SystemBiosVersion` = `ALASKA - 1072009`, `1654`, `American Megatrends International, LLC. - 5001B` | L2 | `l2.ovmf_identity = yes` (OVMF built in L1) | `scripts/ovmf-identity/`, `steps.s_l1_ovmf_identity`, docs/ovmf-identity.md |
 | QEMU PCI/chipset IDs rewritten | L2 | always (qemu-anti-detection patch) | `qemu-ad-pve.sh` |
+| No install residue: `C:\Windows\Panther\unattend.xml` (+ `UnattendGC`, `actionqueue`, Setup/Panther logs, other answer-file copies) removed | L2 | `l2.cleanup_unattend = yes` | `setup/l1/windows/hygiene.ps1` run by the `l2_finalize` step (`qad-l1.sh finalize`) after the first successful verify |
+| No staging leftovers: `C:\qad\nvidia`, `python`, `openssh`, `firstlogon.*`, `gpu-driver.*`, `w10-code43-check.ps1` removed (kept: `venv`, `py`, `audit`, `authorized_keys`, `pytorch-offline-bench.py` which `setup.sh verify` runs; sshd and the admin account) | L2 | `l2.cleanup_staging = yes` | same script; skipped while the NVIDIA driver is not installed yet |
 
 The PVE host itself stays stock (no host package, kernel, modprobe or `storage.cfg` change).
 
@@ -35,7 +37,7 @@ The PVE host itself stays stock (no host package, kernel, modprobe or `storage.c
 * **Stale registry `Enum` keys**: Windows keeps device instance keys (`HKLM\SYSTEM\CurrentControlSet\Enum`) of the
   devices it saw during the install (e.g. Standard VGA, the QEMU/ICH9 devices); they stay until removed by hand or by a
   reinstall without them.
-* **CD-ROM name**: the QEMU CD-ROM keeps its `QEMU DVD-ROM` model; the staging CD is only attached during install/first boot.
+* **CD-ROM name**: the patched QEMU reports the CD-ROM as `ASUS ASUS DVD-ROM` (not `QEMU DVD-ROM`); the staging CD is attached during install/first boot.
 * PCI device list in general (Q35/ICH9 bridges, virtio/AHCI/e1000e controllers, USB tablet), timing behaviour (TSC,
   RDTSCP/latency measurements), the `QEMU` / `Bochs` strings in the DSDT/SSDT that Windows does not enumerate, and a
   hypervisor seen by anything that runs on the PVE host.

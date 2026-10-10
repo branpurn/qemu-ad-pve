@@ -594,6 +594,24 @@ l2_scp() { # l2_scp LOCAL... REMOTE_DIR : same host-key policy as l2_ssh
     -o UserKnownHostsFile="$L2_KNOWN" "${@:1:$#-1}" "$QAD_ADMIN_USER@$QAD_L2_IP:$dest"
 }
 
+# Post-verify hygiene in the L2 (l2.cleanup_unattend / l2.cleanup_staging): setup/l1/windows/hygiene.ps1.
+step_hygiene() {
+  local un=${QAD_L2_CLEAN_UNATTEND:-1} st=${QAD_L2_CLEAN_STAGING:-1}
+  if [ "$un" != 1 ] && [ "$st" != 1 ]; then echo "HYGIENE=off (l2.cleanup_unattend/cleanup_staging = no)"; return 0; fi
+  l2_ssh 'exit 0' >/dev/null 2>&1 || die "L2 not reachable over SSH; hygiene needs it"
+  l2_scp "$REPO/setup/l1/windows/hygiene.ps1" 'C:/Windows/Temp/' || die "scp hygiene.ps1 to the L2 failed"
+  l2_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\hygiene.ps1 -Unattend $un -Staging $st" | tr -d '\r' | tee "$W/hygiene.log"
+  l2_ssh 'del /f /q C:\Windows\Temp\hygiene.ps1' >/dev/null 2>&1 || true
+  grep -q '^HYGIENE_DONE' "$W/hygiene.log" || die "hygiene did not finish (see $W/hygiene.log)"
+  ! grep -q '^HYGIENE_FAILED' "$W/hygiene.log" || echo "HYGIENE: some files could not be removed (see above)" >&2
+}
+
+# One-shot, after the first successful verify: every enabled post-install cleanup, then verify again.
+step_finalize() {
+  step_hygiene
+  step_verify
+}
+
 # Opt-in, read-only: does the machine look like ordinary hardware (see docs/bare-metal-appearance.md)?
 step_audit() {
   export W ENVF AUD="$REPO/scripts/bare-metal-audit"
@@ -632,6 +650,8 @@ case "$step" in
   l2-enable) step_l2_enable ;;
   l2-wipe) step_l2_wipe ;;
   verify) step_verify ;;
+  hygiene) step_hygiene ;;
+  finalize) step_finalize ;;
   audit) step_audit ;;
   status) step_status ;;
   *) echo "unknown step: $step" >&2; exit 64 ;;

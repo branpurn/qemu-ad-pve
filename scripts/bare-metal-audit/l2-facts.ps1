@@ -15,3 +15,6 @@ $i = 0; Get-CimInstance Win32_DiskDrive | ForEach-Object { P "disk.$i.model" $_.
 $i = 0; Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.MACAddress } | ForEach-Object { P "nic.$i.mac" $_.MACAddress; P "nic.$i.name" $_.Name; $i++ }
 $i = 0; Get-CimInstance Win32_VideoController | ForEach-Object { P "video.$i.name" $_.Name; P "video.$i.code" $_.ConfigManagerErrorCode; P "video.$i.driver" $_.DriverVersion; $i++ }
 P 'systeminfo.hypervisor_lines' ((systeminfo | Select-String -Pattern 'hypervisor' | Measure-Object).Count)
+# install residue (l2.cleanup_unattend / l2.cleanup_staging)
+P 'residue.unattend' ((@('C:\unattend.xml', 'C:\autounattend.xml', 'C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\UnattendGC', 'C:\Windows\Panther\actionqueue', 'C:\Windows\System32\Sysprep\unattend.xml') | Where-Object { Test-Path -LiteralPath $_ }) -join ',')
+P 'residue.staging' ((@('nvidia', 'python', 'openssh', 'firstlogon.ps1', 'firstlogon.log', 'firstlogon.done', 'gpu-driver.ps1', 'gpu-driver.log') | Where-Object { Test-Path -LiteralPath (Join-Path 'C:\qad' $_) }) -join ',')
